@@ -1,0 +1,27 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = __importDefault(require("express"));
+const caFirmController_1 = require("../controllers/caFirmController");
+const auth_1 = require("../middleware/auth");
+const roleCheck_1 = require("../middleware/roleCheck");
+const validateRequest_1 = require("../middleware/validateRequest");
+const requireActiveFirm_1 = require("../middleware/requireActiveFirm");
+const caFirmValidators_1 = require("../validators/caFirmValidators");
+const router = express_1.default.Router();
+router.use(auth_1.protect);
+router.get("/me", (0, roleCheck_1.authorize)("ca_firm_admin"), caFirmController_1.getMyFirm);
+router.put("/me", (0, roleCheck_1.authorize)("ca_firm_admin"), requireActiveFirm_1.requireActiveFirm, (0, validateRequest_1.validate)(caFirmValidators_1.updateCaFirmSchema), caFirmController_1.updateMyFirm);
+router.get("/my-plan", caFirmController_1.getMyFirmPlan);
+router.get("/plans", (0, roleCheck_1.authorize)("ca_firm_admin", "ca_firm_staff"), caFirmController_1.getPlanCatalog);
+router.post("/me/subscription-request", (0, roleCheck_1.authorize)("ca_firm_admin"), (0, validateRequest_1.validate)(caFirmValidators_1.subscriptionRequestSchema), caFirmController_1.requestSubscriptionChange);
+router.get("/", (0, roleCheck_1.authorize)("super_admin"), caFirmController_1.listCaFirms);
+router.post("/", (0, roleCheck_1.authorize)("super_admin"), (0, validateRequest_1.validate)(caFirmValidators_1.createCaFirmSchema), caFirmController_1.createCaFirm);
+router.get("/:id", (0, roleCheck_1.authorize)("super_admin"), caFirmController_1.getCaFirm);
+router.put("/:id", (0, roleCheck_1.authorize)("super_admin"), (0, validateRequest_1.validate)(caFirmValidators_1.updateCaFirmSchema), caFirmController_1.updateCaFirm);
+router.delete("/:id", (0, roleCheck_1.authorize)("super_admin"), caFirmController_1.deleteCaFirm);
+router.put("/:id/subscription", (0, roleCheck_1.authorize)("super_admin"), (0, validateRequest_1.validate)(caFirmValidators_1.updateSubscriptionSchema), caFirmController_1.updateSubscription);
+router.put("/:id/reset-admin-password", (0, roleCheck_1.authorize)("super_admin"), (0, validateRequest_1.validate)(caFirmValidators_1.resetAdminPasswordSchema), caFirmController_1.resetFirmAdminPassword);
+exports.default = router;

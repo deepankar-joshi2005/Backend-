@@ -1,0 +1,22 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = __importDefault(require("express"));
+const crmController_1 = require("../controllers/crmController");
+const auth_1 = require("../middleware/auth");
+const roleCheck_1 = require("../middleware/roleCheck");
+const validateRequest_1 = require("../middleware/validateRequest");
+const requireActiveFirm_1 = require("../middleware/requireActiveFirm");
+const crmValidators_1 = require("../validators/crmValidators");
+const router = express_1.default.Router();
+router.use(auth_1.protect, (0, roleCheck_1.authorize)("ca_firm_admin", "ca_firm_staff"));
+router.get("/dashboard", crmController_1.getCrmDashboard);
+router.get("/leads", crmController_1.listLeads);
+router.post("/leads", requireActiveFirm_1.requireActiveFirm, (0, validateRequest_1.validate)(crmValidators_1.createLeadSchema), crmController_1.createLead);
+router.get("/leads/:id", crmController_1.getLead);
+router.put("/leads/:id", requireActiveFirm_1.requireActiveFirm, (0, validateRequest_1.validate)(crmValidators_1.updateLeadSchema), crmController_1.updateLead);
+router.delete("/leads/:id", (0, roleCheck_1.authorize)("ca_firm_admin"), requireActiveFirm_1.requireActiveFirm, crmController_1.deleteLead);
+router.post("/leads/:id/notes", requireActiveFirm_1.requireActiveFirm, (0, validateRequest_1.validate)(crmValidators_1.addLeadNoteSchema), crmController_1.addLeadNote);
+exports.default = router;

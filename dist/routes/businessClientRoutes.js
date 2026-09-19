@@ -1,0 +1,22 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = __importDefault(require("express"));
+const businessClientController_1 = require("../controllers/businessClientController");
+const auth_1 = require("../middleware/auth");
+const roleCheck_1 = require("../middleware/roleCheck");
+const validateRequest_1 = require("../middleware/validateRequest");
+const requireActiveFirm_1 = require("../middleware/requireActiveFirm");
+const businessClientValidators_1 = require("../validators/businessClientValidators");
+const router = express_1.default.Router();
+router.use(auth_1.protect);
+router.get("/summary", (0, roleCheck_1.authorize)("super_admin"), businessClientController_1.getBusinessClientSummary);
+router.get("/me", (0, roleCheck_1.authorize)("business_client_admin", "business_client_employee"), businessClientController_1.getMyBusinessClient);
+router.get("/me/hrms-sso", (0, roleCheck_1.authorize)("business_client_admin", "business_client_employee"), businessClientController_1.getMyHrmsSsoToken);
+router.get("/mine", (0, roleCheck_1.authorize)("ca_firm_admin"), businessClientController_1.listMyBusinessClients);
+router.post("/mine", (0, roleCheck_1.authorize)("ca_firm_admin"), requireActiveFirm_1.requireActiveFirm, (0, validateRequest_1.validate)(businessClientValidators_1.createBusinessClientSchema), businessClientController_1.createBusinessClient);
+router.put("/mine/:id", (0, roleCheck_1.authorize)("ca_firm_admin"), requireActiveFirm_1.requireActiveFirm, (0, validateRequest_1.validate)(businessClientValidators_1.updateBusinessClientSchema), businessClientController_1.updateMyBusinessClient);
+router.put("/mine/:id/reset-admin-password", (0, roleCheck_1.authorize)("ca_firm_admin"), requireActiveFirm_1.requireActiveFirm, (0, validateRequest_1.validate)(businessClientValidators_1.resetBusinessClientAdminPasswordSchema), businessClientController_1.resetBusinessClientAdminPassword);
+exports.default = router;

@@ -1,0 +1,21 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = __importDefault(require("express"));
+const complianceController_1 = require("../controllers/complianceController");
+const auth_1 = require("../middleware/auth");
+const roleCheck_1 = require("../middleware/roleCheck");
+const validateRequest_1 = require("../middleware/validateRequest");
+const requireActiveFirm_1 = require("../middleware/requireActiveFirm");
+const complianceValidators_1 = require("../validators/complianceValidators");
+const router = express_1.default.Router();
+router.use(auth_1.protect, (0, roleCheck_1.authorize)("ca_firm_admin", "ca_firm_staff"));
+router.get("/dashboard", complianceController_1.getComplianceDashboard);
+router.get("/tasks", complianceController_1.listTasks);
+router.post("/tasks", requireActiveFirm_1.requireActiveFirm, (0, validateRequest_1.validate)(complianceValidators_1.createTaskSchema), complianceController_1.createTask);
+router.put("/tasks/:id", requireActiveFirm_1.requireActiveFirm, (0, validateRequest_1.validate)(complianceValidators_1.updateTaskSchema), complianceController_1.updateTask);
+router.delete("/tasks/:id", (0, roleCheck_1.authorize)("ca_firm_admin"), requireActiveFirm_1.requireActiveFirm, complianceController_1.deleteTask);
+router.post("/tasks/:id/notes", requireActiveFirm_1.requireActiveFirm, (0, validateRequest_1.validate)(complianceValidators_1.addTaskNoteSchema), complianceController_1.addTaskNote);
+exports.default = router;
