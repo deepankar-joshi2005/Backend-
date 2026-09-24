@@ -25,9 +25,18 @@ const app = express();
 // break payments. Helmet's other protections (X-Frame-Options, no-sniff,
 // etc.) stay on.
 app.use(helmet({ contentSecurityPolicy: false }));
+
+// CLIENT_URL may hold a comma-separated list — useful while the frontend is
+// deployed to more than one host (e.g. testing both Vercel and Netlify), or
+// to allow a preview deployment alongside the production domain.
+const allowedOrigins = (process.env.CLIENT_URL || "http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: [process.env.CLIENT_URL || "http://localhost:5173"],
+    origin: allowedOrigins,
     credentials: true,
   })
 );

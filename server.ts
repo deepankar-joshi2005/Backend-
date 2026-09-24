@@ -14,10 +14,17 @@ const PORT = process.env.PORT || 5000;
 
 const httpServer = createServer(app);
 
+// CLIENT_URL may hold a comma-separated list — kept in sync with the same
+// parsing in app.ts's cors() setup.
+const allowedOrigins = (process.env.CLIENT_URL || "http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 // HRMS's realtime chat/notifications — attached to the same shared server.
 const io = new Server(httpServer, {
   cors: {
-    origin: [process.env.CLIENT_URL || "http://localhost:5173"],
+    origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type", "Authorization"],
