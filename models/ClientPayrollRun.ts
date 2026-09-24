@@ -25,6 +25,11 @@ const clientPayrollRunSchema = new mongoose.Schema(
     totalGross: { type: Number, default: 0 },
     totalDeduction: { type: Number, default: 0 },
     totalNet: { type: Number, default: 0 },
+    // Per-component deduction totals for this month, summed across every
+    // employee — e.g. "Employee PF" -> 12000. Set alongside totalDeduction in
+    // generatePayroll, so the runs list can show a per-component column
+    // without re-fetching every employee's ClientPayrollEntry.
+    deductionTotals: { type: Map, of: Number, default: {} },
     // Set once the CA explicitly saves this month's Salary Structure — Generate
     // payroll is blocked until this is true (see clientPayrollController.generatePayroll).
     structureSaved: { type: Boolean, default: false },

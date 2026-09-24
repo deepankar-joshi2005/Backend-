@@ -15,6 +15,12 @@ import {
   listClientDirectory,
   provisionBusinessClientFromLead,
   upgradeToHrms,
+  getMyEmployeeForm,
+  listMyEmployees,
+  createMyEmployee,
+  updateMyEmployee,
+  listClientEmployees,
+  getMySalaryStructureForMonth,
 } from "../controllers/businessClientController";
 import { protect } from "../middleware/auth";
 import { authorize } from "../middleware/roleCheck";
@@ -25,6 +31,8 @@ import {
   updateBusinessClientSchema,
   resetBusinessClientAdminPasswordSchema,
   upgradeToHrmsSchema,
+  createMyEmployeeSchema,
+  updateMyEmployeeSchema,
 } from "../validators/businessClientValidators";
 import clientPayrollRoutes from "./clientPayrollRoutes";
 import { getFirmSettings, updateFirmSettings } from "../controllers/clientPayrollController";
@@ -41,6 +49,20 @@ router.get(
   "/me/hrms-sso",
   authorize("business_client_admin", "business_client_employee"),
   getMyHrmsSsoToken
+);
+
+// Non-HRMS Business Client Admin's own dashboard — employee onboarding link
+// (each employee identifies themselves by their own Employee ID) + the
+// employee master it feeds.
+router.get("/me/employee-form", authorize("business_client_admin"), getMyEmployeeForm);
+router.get("/me/employees", authorize("business_client_admin"), listMyEmployees);
+router.get("/me/salary-structure/:month", authorize("business_client_admin"), getMySalaryStructureForMonth);
+router.post("/me/employees", authorize("business_client_admin"), validate(createMyEmployeeSchema), createMyEmployee);
+router.put(
+  "/me/employees/:employeeId",
+  authorize("business_client_admin"),
+  validate(updateMyEmployeeSchema),
+  updateMyEmployee
 );
 
 router.get("/mine", authorize("ca_firm_admin"), listMyBusinessClients);
@@ -70,6 +92,9 @@ router.get(
   authorize("ca_firm_admin", "ca_firm_staff"),
   getBusinessClientHrmsSsoToken
 );
+// Basic employee details for a Non-HRMS client — powers the "View" action on
+// Business Clients / Payroll Management cards.
+router.get("/mine/:id/employees", authorize("ca_firm_admin", "ca_firm_staff"), listClientEmployees);
 router.post(
   "/mine",
   authorize("ca_firm_admin"),

@@ -5,6 +5,7 @@ import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import session from "express-session";
 import path from "path";
+import fs from "fs";
 import { sanitizeInputs } from "./middleware/sanitize";
 import routes from "./routes/index";
 import { notFound, errorHandler } from "./middleware/errorMiddleware";
@@ -77,14 +78,20 @@ app.use("/api", hrmsRouter);
 // CA-Management, hrms-app.html for HRMS), just served by Express instead of
 // Vite. The /hrms-app/* rewrite below is the production equivalent of the
 // hrmsAppFallback dev-server plugin in CA-Frontend/vite.config.ts.
+// Guarded by existsSync: when the backend is deployed on its own (frontend
+// hosted separately, e.g. Vercel), CA-Frontend/dist never exists on this
+// instance — skip static-serving entirely instead of crashing with ENOENT
+// on every non-API route.
 if (process.env.NODE_ENV === "production") {
   const frontendDist = path.join(__dirname, "..", "CA-Frontend", "dist");
-  app.use(express.static(frontendDist));
+  if (fs.existsSync(path.join(frontendDist, "index.html"))) {
+    app.use(express.static(frontendDist));
 
-  app.get(/^\/(?!api\/).*/, (req, res) => {
-    const entry = req.path.startsWith("/hrms-app") ? "hrms-app.html" : "index.html";
-    res.sendFile(path.join(frontendDist, entry));
-  });
+    app.get(/^\/(?!api\/).*/, (req, res) => {
+      const entry = req.path.startsWith("/hrms-app") ? "hrms-app.html" : "index.html";
+      res.sendFile(path.join(frontendDist, entry));
+    });
+  }
 }
 
 app.use(notFound);

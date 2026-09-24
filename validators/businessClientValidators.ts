@@ -54,3 +54,29 @@ export const upgradeToHrmsSchema = z.object({
     planTierId: z.string().trim().min(1, "Select an HRMS plan"),
   }),
 });
+
+const clientEmployeeFields = {
+  name: z.string().trim().min(2, "Name is too short"),
+  phone: z.string().trim().optional().or(z.literal("")),
+  designation: z.string().trim().optional().or(z.literal("")),
+  dateOfJoining: z.coerce.date().optional(),
+  email: z.string().trim().toLowerCase().email("Invalid email").optional().or(z.literal("")),
+  costCenter: z.string().trim().optional().or(z.literal("")),
+  pan: z.string().trim().optional().or(z.literal("")),
+  bankAccountNumber: z.string().trim().optional().or(z.literal("")),
+  bankIfsc: z.string().trim().optional().or(z.literal("")),
+  bankName: z.string().trim().optional().or(z.literal("")),
+  accountHolderName: z.string().trim().optional().or(z.literal("")),
+};
+
+export const createMyEmployeeSchema = z.object({
+  body: z.object(clientEmployeeFields),
+});
+
+export const updateMyEmployeeSchema = z.object({
+  body: z.object({
+    ...clientEmployeeFields,
+    name: clientEmployeeFields.name.optional(),
+    isActive: z.boolean().optional(),
+  }),
+});

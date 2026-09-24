@@ -1,9 +1,16 @@
+import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import CaFirm from "../models/CaFirm";
 import User from "../models/User";
 import BusinessClient from "../models/BusinessClient";
 import Lead from "../models/Lead";
 import HrmsPlanTier from "../models/HrmsPlanTier";
+import ClientEmployee from "../models/ClientEmployee";
+import ClientEmployeeSalaryStructure from "../models/ClientEmployeeSalaryStructure";
+import ClientPayrollRun from "../models/ClientPayrollRun";
+import ClientPayrollEntry from "../models/ClientPayrollEntry";
+import ClientPayrollSettings from "../models/ClientPayrollSettings";
+import ClientPaymentFile from "../models/ClientPaymentFile";
 import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
 import { getPagination, buildMeta } from "../utils/paginate";
@@ -14,14 +21,16 @@ import { sendMail } from "../utils/sendMail";
 import { credentialsWelcomeEmail } from "../utils/emailTemplates";
 import { provisionHrmsCompany, getHrmsSsoToken, getCaProxyHrmsSsoToken } from "../utils/provisionHrms";
 import HrmsCompany from "../hrms/models/hrms/Company";
+import { generateNextEmployeeCode, toNameKey } from "../utils/employeeIdGenerator";
 
 const SALT_ROUNDS = Number(process.env.BCRYPT_SALT_ROUNDS) || 10;
 
 // Shared by createBusinessClient (useHrms ticked at onboarding) and
-// upgradeToHrms (useHrms turned on later for an existing client) — creates the
-// business_client_admin login, provisions the HRMS company (best-effort), and
-// emails credentials. Does NOT persist client.hrmsCompanyId/Code — callers
-// must client.save() afterward alongside whatever else they're changing.
+// upgradeToHrms (useHrms turned on later for an existing client) — creates or
+// reuses the business_client_admin login, provisions the HRMS company
+// (best-effort), and emails credentials. Does NOT persist
+// client.hrmsCompanyId/Code — callers must client.save() afterward alongside
+// whatever else they're changing.
 async function provisionHrmsForClient(
   client,
   firm,
@@ -29,26 +38,42 @@ async function provisionHrmsForClient(
   req
 ) {
   if (!adminEmail) throw new ApiError(400, "An email is required to create the HRMS login");
-  const existingAdmin = await User.findOne({ email: adminEmail });
-  if (existingAdmin) throw new ApiError(409, "An account with this admin email already exists");
   if (!planTierId) throw new ApiError(400, "Select an HRMS plan for this client");
   const planTier = await HrmsPlanTier.findById(planTierId);
   if (!planTier) throw new ApiError(404, "Selected HRMS plan not found");
+
+  // Every Business Client already gets a business_client_admin login at
+  // creation time now, regardless of useHrms (see createBusinessClient) — so
+  // upgrading a non-HRMS client reuses that existing login instead of trying
+  // to create a second one (which would collide on email with itself).
+  let admin = await User.findOne({ businessClientId: client._id, role: "business_client_admin" });
+
+  const existingOtherAdmin = await User.findOne({ email: adminEmail, _id: { $ne: admin?._id } });
+  if (existingOtherAdmin) throw new ApiError(409, "An account with this admin email already exists");
 
   const usingOwnPassword = !!adminPassword;
   const tempPassword = usingOwnPassword ? null : generateTempPassword();
   const passwordHash = await bcrypt.hash(usingOwnPassword ? adminPassword : tempPassword, SALT_ROUNDS);
 
-  const admin = await User.create({
-    name: adminName,
-    email: adminEmail,
-    passwordHash,
-    role: "business_client_admin",
-    caFirmId: firm._id,
-    businessClientId: client._id,
-    mustChangePassword: !usingOwnPassword,
-    createdBy: req.user.id,
-  });
+  if (admin) {
+    admin.name = adminName;
+    admin.email = adminEmail;
+    admin.passwordHash = passwordHash;
+    admin.mustChangePassword = !usingOwnPassword;
+    admin.tokenVersion += 1;
+    await admin.save();
+  } else {
+    admin = await User.create({
+      name: adminName,
+      email: adminEmail,
+      passwordHash,
+      role: "business_client_admin",
+      caFirmId: firm._id,
+      businessClientId: client._id,
+      mustChangePassword: !usingOwnPassword,
+      createdBy: req.user.id,
+    });
+  }
 
   try {
     const provisioned = await provisionHrmsCompany({
@@ -69,6 +94,53 @@ async function provisionHrmsForClient(
   } catch (err) {
     console.error("Failed to provision HRMS company:", err.message);
   }
+
+  try {
+    const settings = await getSystemSettings();
+    const { subject, html } = credentialsWelcomeEmail({
+      platformName: settings.platformName,
+      firmName: client.name,
+      recipientName: admin.name,
+      email: admin.email,
+      password: usingOwnPassword ? adminPassword : tempPassword,
+      loginUrl: `${process.env.CLIENT_URL}/login`,
+    });
+    await sendMail({ to: admin.email, subject, html });
+  } catch (err) {
+    console.error("Failed to send business client admin welcome email:", err.message);
+  }
+
+  return { admin, tempPassword };
+}
+
+// Mirrors provisionHrmsForClient but for clients that don't want HRMS at all
+// — still creates a real business_client_admin login (so they can manage
+// their own employees at /client-admin and set up the employee onboarding
+// link), just skips HRMS company provisioning entirely.
+async function createClientAdminLogin(
+  client,
+  firm,
+  { adminName, adminEmail, adminPassword }: { adminName: string; adminEmail: string; adminPassword?: string },
+  req
+) {
+  if (!adminEmail) throw new ApiError(400, "An email is required to create this client's login");
+  const existingAdmin = await User.findOne({ email: adminEmail });
+  if (existingAdmin) throw new ApiError(409, "An account with this admin email already exists");
+
+  const usingOwnPassword = !!adminPassword;
+  const tempPassword = usingOwnPassword ? null : generateTempPassword();
+  const passwordHash = await bcrypt.hash(usingOwnPassword ? adminPassword : tempPassword, SALT_ROUNDS);
+
+  const admin = await User.create({
+    name: adminName,
+    email: adminEmail,
+    passwordHash,
+    role: "business_client_admin",
+    caFirmId: firm._id,
+    businessClientId: client._id,
+    mustChangePassword: !usingOwnPassword,
+    createdBy: req.user.id,
+  });
 
   try {
     const settings = await getSystemSettings();
@@ -190,17 +262,20 @@ export const createBusinessClient = catchAsync(async (req, res) => {
   const { adminName, adminEmail, adminPassword, planTierId } = req.body;
 
   // "Use HRMS" defaults on (matches the always-on behaviour before this was a
-  // checkbox); when it's ticked, the admin login is auto-derived from the
-  // Primary Contact fields rather than asking for a separate admin name/email.
+  // checkbox); the admin login is auto-derived from the Primary Contact
+  // fields rather than asking for a separate admin name/email. Every Business
+  // Client gets this login now, regardless of useHrms — when HRMS is off it
+  // just lands on /client-admin instead of being handed off to HRMS.
   const wantsHrms = req.body.useHrms !== false;
   const resolvedAdminName = adminName || contactPerson || name;
   const resolvedAdminEmail = adminEmail || email;
 
+  if (!resolvedAdminEmail) throw new ApiError(400, "An email is required to create this client's login");
+  const existingAdmin = await User.findOne({ email: resolvedAdminEmail });
+  if (existingAdmin) throw new ApiError(409, "An account with this admin email already exists");
+
   let planTier = null;
   if (wantsHrms) {
-    if (!resolvedAdminEmail) throw new ApiError(400, "An email is required to create the HRMS login");
-    const existingAdmin = await User.findOne({ email: resolvedAdminEmail });
-    if (existingAdmin) throw new ApiError(409, "An account with this admin email already exists");
     if (!planTierId) throw new ApiError(400, "Select an HRMS plan for this client");
     planTier = await HrmsPlanTier.findById(planTierId);
     if (!planTier) throw new ApiError(404, "Selected HRMS plan not found");
@@ -264,6 +339,9 @@ export const createBusinessClient = catchAsync(async (req, res) => {
     caFirmId: firm._id,
     createdBy: req.user.id,
     leadId: lead._id,
+    // Public, password-protected employee self-onboarding link — generated
+    // for every client; only surfaced in the UI for non-HRMS ones today.
+    employeeFormToken: crypto.randomBytes(16).toString("hex"),
   });
 
   lead.businessClientId = client._id;
@@ -272,21 +350,21 @@ export const createBusinessClient = catchAsync(async (req, res) => {
   let admin = null;
   let tempPassword = null;
 
-  if (wantsHrms) {
-    try {
-      const result = await provisionHrmsForClient(
-        client,
-        firm,
-        { adminName: resolvedAdminName, adminEmail: resolvedAdminEmail, adminPassword, planTierId },
-        req
-      );
-      admin = result.admin;
-      tempPassword = result.tempPassword;
-      await client.save(); // persists hrmsCompanyId/Code set inside the helper
-    } catch (err) {
-      await BusinessClient.findByIdAndDelete(client._id);
-      throw err;
-    }
+  try {
+    const result = wantsHrms
+      ? await provisionHrmsForClient(
+          client,
+          firm,
+          { adminName: resolvedAdminName, adminEmail: resolvedAdminEmail, adminPassword, planTierId },
+          req
+        )
+      : await createClientAdminLogin(client, firm, { adminName: resolvedAdminName, adminEmail: resolvedAdminEmail, adminPassword }, req);
+    admin = result.admin;
+    tempPassword = result.tempPassword;
+    await client.save(); // persists hrmsCompanyId/Code set inside provisionHrmsForClient (no-op otherwise)
+  } catch (err) {
+    await BusinessClient.findByIdAndDelete(client._id);
+    throw err;
   }
 
   await writeAuditLog(req, {
@@ -302,11 +380,9 @@ export const createBusinessClient = catchAsync(async (req, res) => {
       client,
       admin: admin && { id: admin._id, name: admin.name, email: admin.email, tempPassword },
     },
-    message: !wantsHrms
-      ? "Business client onboarded."
-      : tempPassword
-        ? "Business client onboarded. Login credentials have been emailed to their admin."
-        : "Business client onboarded. Their admin can log in with the password you set.",
+    message: tempPassword
+      ? "Business client onboarded. Login credentials have been emailed to their admin."
+      : "Business client onboarded. Their admin can log in with the password you set.",
   });
 });
 
@@ -534,7 +610,24 @@ export const deleteBusinessClient = catchAsync(async (req, res) => {
   if (!client) throw new ApiError(404, "Business client not found");
 
   await User.deleteMany({ businessClientId: client._id, role: "business_client_admin" });
-  if (client.leadId) await Lead.findByIdAndUpdate(client.leadId, { businessClientId: null });
+  // Deleted (not just unlinked) — a Lead left with businessClientId: null
+  // would re-match listPayrollEligibleClients' "converted, not yet
+  // provisioned" query and reappear in Payroll Management under the same
+  // name, looking like the client was never actually deleted.
+  if (client.leadId) await Lead.findByIdAndDelete(client.leadId);
+  // Non-HRMS payroll data has nowhere else to point once the client is gone
+  // — clean it all up rather than leaving orphaned records behind. Resolve
+  // the run IDs before deleting anything in parallel, so ClientPayrollEntry's
+  // cleanup isn't racing ClientPayrollRun's own deleteMany below.
+  const runIds = await ClientPayrollRun.find({ businessClientId: client._id }).distinct("_id");
+  await Promise.all([
+    ClientEmployee.deleteMany({ businessClientId: client._id }),
+    ClientEmployeeSalaryStructure.deleteMany({ businessClientId: client._id }),
+    ClientPayrollRun.deleteMany({ businessClientId: client._id }),
+    ClientPayrollEntry.deleteMany({ payrollRunId: { $in: runIds } }),
+    ClientPayrollSettings.deleteMany({ businessClientId: client._id }),
+    ClientPaymentFile.deleteMany({ businessClientId: client._id }),
+  ]);
   await client.deleteOne();
 
   await writeAuditLog(req, {
@@ -574,4 +667,141 @@ export const resetBusinessClientAdminPassword = catchAsync(async (req, res) => {
     data: { tempPassword },
     message: usingOwnPassword ? "Password updated." : "Password reset. Share the temporary password securely.",
   });
+});
+
+// ── Employee self-onboarding link + employee master (business_client_admin's own view) ──
+
+// Older clients created before this feature existed have no employeeFormToken
+// yet — generate one lazily on first access instead of a migration script.
+async function loadOwnClientWithFormToken(businessClientId) {
+  const client = await BusinessClient.findById(businessClientId);
+  if (!client) throw new ApiError(404, "No business client linked to this account");
+  if (!client.employeeFormToken) {
+    client.employeeFormToken = crypto.randomBytes(16).toString("hex");
+    await client.save();
+  }
+  return client;
+}
+
+export const getMyEmployeeForm = catchAsync(async (req, res) => {
+  const client = await loadOwnClientWithFormToken(req.user.businessClientId);
+  res.json({
+    success: true,
+    data: {
+      token: client.employeeFormToken,
+      url: `${process.env.CLIENT_URL}/onboard/${client.employeeFormToken}`,
+    },
+  });
+});
+
+export const listMyEmployees = catchAsync(async (req, res) => {
+  const employees = await ClientEmployee.find({ businessClientId: req.user.businessClientId }).sort({ createdAt: -1 });
+  res.json({ success: true, data: employees });
+});
+
+export const createMyEmployee = catchAsync(async (req, res) => {
+  const { name, phone, designation, dateOfJoining, email, costCenter, pan, bankAccountNumber, bankIfsc, bankName, accountHolderName } = req.body;
+  const businessClientId = req.user.businessClientId;
+  const client = await BusinessClient.findById(businessClientId).select("name");
+
+  const employeeCode = await generateNextEmployeeCode(client.name, name, businessClientId);
+  const employee = await ClientEmployee.create({
+    businessClientId,
+    employeeCode,
+    name,
+    nameKey: toNameKey(name),
+    phone,
+    designation,
+    dateOfJoining,
+    email,
+    costCenter,
+    pan,
+    bankAccountNumber,
+    bankIfsc,
+    bankName,
+    accountHolderName,
+    source: "manual",
+  });
+
+  res.status(201).json({ success: true, data: employee, message: "Employee added" });
+});
+
+export const updateMyEmployee = catchAsync(async (req, res) => {
+  const employee = await ClientEmployee.findOne({ _id: req.params.employeeId, businessClientId: req.user.businessClientId });
+  if (!employee) throw new ApiError(404, "Employee not found");
+
+  const {
+    name,
+    phone,
+    designation,
+    dateOfJoining,
+    email,
+    costCenter,
+    isActive,
+    pan,
+    bankAccountNumber,
+    bankIfsc,
+    bankName,
+    accountHolderName,
+  } = req.body;
+  if (name !== undefined) {
+    employee.name = name;
+    employee.nameKey = toNameKey(name);
+  }
+  if (phone !== undefined) employee.phone = phone;
+  if (designation !== undefined) employee.designation = designation;
+  if (dateOfJoining !== undefined) employee.dateOfJoining = dateOfJoining;
+  if (email !== undefined) employee.email = email;
+  if (costCenter !== undefined) employee.costCenter = costCenter;
+  if (isActive !== undefined) employee.isActive = isActive;
+  if (pan !== undefined) employee.pan = pan;
+  if (bankAccountNumber !== undefined) employee.bankAccountNumber = bankAccountNumber;
+  if (bankIfsc !== undefined) employee.bankIfsc = bankIfsc;
+  if (bankName !== undefined) employee.bankName = bankName;
+  if (accountHolderName !== undefined) employee.accountHolderName = accountHolderName;
+  await employee.save();
+
+  res.json({ success: true, data: employee, message: "Employee updated" });
+});
+
+// ── CA firm-admin/staff read-only view of one client's employees ──
+
+export const listClientEmployees = catchAsync(async (req, res) => {
+  const client = await BusinessClient.findOne({ _id: req.params.id, caFirmId: req.user.caFirmId });
+  if (!client) throw new ApiError(404, "Business client not found");
+  const employees = await ClientEmployee.find({ businessClientId: client._id }).sort({ createdAt: -1 });
+  res.json({ success: true, data: employees });
+});
+
+// ── Business Client Admin's own read-only view of their month-wise Salary
+// Structure — mirrors clientPayrollController.getStructureForMonth, scoped by
+// req.user.businessClientId instead of a caFirmId-checked :id param. View
+// only: editing a client's payroll numbers stays CA staff's responsibility.
+export const getMySalaryStructureForMonth = catchAsync(async (req, res) => {
+  const businessClientId = req.user.businessClientId;
+  const month = req.params.month;
+  if (!/^\d{4}-\d{2}$/.test(month)) throw new ApiError(400, "Invalid month, expected YYYY-MM");
+
+  const [structures, run] = await Promise.all([
+    ClientEmployeeSalaryStructure.find({ businessClientId, month }).sort({ createdAt: 1 }).lean(),
+    ClientPayrollRun.findOne({ businessClientId, month }).lean(),
+  ]);
+
+  const employeeIds = structures.map((s) => s.clientEmployeeId);
+  const employees = await ClientEmployee.find({ _id: { $in: employeeIds } }).lean();
+  const employeeById = new Map(employees.map((e) => [String(e._id), e]));
+
+  let netByEmployeeId = new Map();
+  if (run && run.status !== "Draft") {
+    const entries = await ClientPayrollEntry.find({ payrollRunId: run._id }).lean();
+    netByEmployeeId = new Map(entries.map((e) => [String(e.clientEmployeeId), e.net]));
+  }
+
+  const data = structures.map((s) => ({
+    ...s,
+    employee: employeeById.get(String(s.clientEmployeeId)) || null,
+    net: netByEmployeeId.get(String(s.clientEmployeeId)) ?? null,
+  }));
+
+  res.json({ success: true, data, run: run || null });
 });

@@ -10,32 +10,41 @@ export async function getOrCreateFirmPayrollSettings(caFirmId: string | mongoose
   return settings;
 }
 
-// One firm-wide format (prefix + zero-padded sequence, e.g. EMP-0001), but the
-// sequence itself is counted independently per client — mirrors the existing
-// unique {businessClientId, employeeCode} index on ClientEmployee.
+function initials(text: string, len = 3) {
+  const letters = String(text || "").replace(/[^a-zA-Z]/g, "");
+  return (letters.slice(0, len) || "XXX").toUpperCase();
+}
+
+// Fixed, system-wide Employee ID format — no longer configurable (there used
+// to be a firm-level prefix/padding setting; that's gone):
+//   {Company initials}-{First name initials}-{Last name initials}-{seq}
+// e.g. "SHR-RAV-SHA-001" for "Shree Traders" / "Ravi Sharma". The trailing
+// sequence is a running per-company (per businessClientId) employee count,
+// independent of the name-derived initials, so two employees who happen to
+// share initials still get distinct codes — mirrors the unique
+// {businessClientId, employeeCode} index on ClientEmployee.
 export async function generateNextEmployeeCode(
-  caFirmId: string | mongoose.Types.ObjectId,
+  companyName: string,
+  employeeName: string,
   businessClientId: string | mongoose.Types.ObjectId
 ) {
-  const firmSettings = await getOrCreateFirmPayrollSettings(caFirmId);
-  const prefix = firmSettings.employeeIdPrefix || "EMP-";
-  const padding = firmSettings.employeeIdPadding || 4;
+  const nameParts = String(employeeName || "").trim().split(/\s+/).filter(Boolean);
+  const firstName = nameParts[0] || "";
+  const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : firstName;
+  const companyFirstWord = String(companyName || "").trim().split(/\s+/)[0] || "";
+  const prefix = `${initials(companyFirstWord)}-${initials(firstName)}-${initials(lastName)}`;
 
-  const existing = await ClientEmployee.find({
-    businessClientId,
-    employeeCode: { $regex: `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\d+$` },
-  })
-    .select("employeeCode")
-    .lean();
-
-  let maxNumber = 0;
+  const existing = await ClientEmployee.find({ businessClientId }).select("employeeCode").lean();
+  let maxSeq = 0;
   for (const emp of existing) {
-    const suffix = emp.employeeCode.slice(prefix.length);
-    const num = parseInt(suffix, 10);
-    if (!Number.isNaN(num) && num > maxNumber) maxNumber = num;
+    const match = /-(\d+)$/.exec(emp.employeeCode || "");
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (!Number.isNaN(n) && n > maxSeq) maxSeq = n;
+    }
   }
 
-  return `${prefix}${String(maxNumber + 1).padStart(padding, "0")}`;
+  return `${prefix}-${String(maxSeq + 1).padStart(3, "0")}`;
 }
 
 export function toNameKey(name: string) {

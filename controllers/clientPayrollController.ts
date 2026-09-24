@@ -2,6 +2,19 @@ import BusinessClient from "../models/BusinessClient";
 import ClientPayrollSettings, {
   DEFAULT_EARNING_COMPONENTS,
   DEFAULT_DEDUCTION_COMPONENTS,
+  DEFAULT_TEMPLATE_COLUMNS,
+  TEMPLATE_COLUMN_ROLES,
+  TEMPLATE_COLUMN_DATA_TYPES,
+  PERCENT_ONLY_COMPONENTS,
+  NON_CONFIGURABLE_COMPONENTS,
+  STATUTORY_WAGE_BASE_COMPONENTS,
+  STATUTORY_EXCLUDED_COMPONENTS,
+  PF_WAGE_CEILING,
+  PF_RATE,
+  ESI_WAGE_CEILING,
+  ESI_RATE,
+  EMPLOYER_PF_RATE,
+  EMPLOYER_ESI_RATE,
 } from "../models/ClientPayrollSettings";
 import ClientEmployee from "../models/ClientEmployee";
 import ClientEmployeeSalaryStructure from "../models/ClientEmployeeSalaryStructure";
@@ -10,12 +23,22 @@ import ClientPayrollEntry from "../models/ClientPayrollEntry";
 import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
 import { writeAuditLog } from "../utils/writeAuditLog";
-import { buildStructureTemplateRows, parseStructureWorkbook, sendWorkbook, ParsedStructureRow } from "../utils/clientPayrollExcel";
+import { buildStructureTemplateRows, parseStructureWorkbook, sendWorkbook, ParsedStructureRow, TemplateColumn } from "../utils/clientPayrollExcel";
 import { generateClientPayslipPDF } from "../utils/generateClientPayslipPDF";
 import { generateNextEmployeeCode, getOrCreateFirmPayrollSettings, toNameKey } from "../utils/employeeIdGenerator";
 
 function isValidMonth(month: string) {
   return /^\d{4}-\d{2}$/.test(month);
+}
+
+function slugify(label: string) {
+  return (
+    String(label || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "column"
+  );
 }
 
 async function loadClient(req) {
@@ -31,34 +54,147 @@ async function getOrCreateSettings(businessClientId) {
       businessClientId,
       earningComponents: DEFAULT_EARNING_COMPONENTS,
       deductionComponents: DEFAULT_DEDUCTION_COMPONENTS,
+      templateColumns: DEFAULT_TEMPLATE_COLUMNS,
     });
+  } else if (!settings.templateColumns || settings.templateColumns.length === 0) {
+    // Backfill for settings docs created before Template Settings existed —
+    // identical to today's fixed 4-column behavior until the CA changes it.
+    settings.templateColumns = DEFAULT_TEMPLATE_COLUMNS as any;
+    await settings.save();
   }
   return settings;
 }
 
-// Recomputes every non-Basic earning/deduction component as % of Basic Salary
-// for a single structure doc, in place (does not save). Components with no
-// configured percentage are left untouched (0, or whatever was there before).
+// Calculation, in place on a single structure doc (does not save):
+//   1. Basic is configured via Structure Setting like any other component —
+//      "percent" (of CTC — it's the one component whose % is of CTC, not of
+//      Basic, since it can't be a % of itself) or "fixed". It's the anchor
+//      everything else derives from.
+//   2. Every other earning component is either:
+//      - "percent" (default): % of Basic, or
+//      - "fixed": the same flat rupee amount for every employee (e.g.
+//        Arrears set to 1000 means every employee's Arrears is ₹1000).
+//   3. Gross = sum of all earnings.
+//   4. Employee PF and Employee ESI are statutory formulas, fixed and
+//      identical for every client/employee — never a %/fixed value, see
+//      NON_CONFIGURABLE_COMPONENTS and the constants imported above:
+//        Add-back = max(0, sum(STATUTORY_EXCLUDED_COMPONENTS) − 50% of Gross)
+//        Statutory Wages = Basic + DA + Retaining Allowance + Add-back
+//        PF Wages = min(Statutory Wages, PF_WAGE_CEILING); Employee PF = PF Wages × PF_RATE
+//        ESI Wages = Statutory Wages ≤ ESI_WAGE_CEILING ? Statutory Wages : 0; Employee ESI = ESI Wages × ESI_RATE
+//   5. Every other deduction component follows the same percent/fixed rule as (2).
+//      PERCENT_ONLY_COMPONENTS (NPS) ignores mode and is always "percent" —
+//      enforced again here, not just trusted from settings.
+// A component's mode/%/fixed comes from the client-wide setting UNLESS this
+// employee has their own override for it (structure.componentModeOverrides
+// etc, set via "Edit salary structure" — see updateEmployeeComponentSettings)
+// — that lets one employee's Basic/DA/HRA/etc. differ without touching anyone
+// else, and without freezing them out of future client-wide changes on
+// components they never overrode. Components with no configured value for
+// their mode are left untouched (0, or whatever was there before).
 function applyPercentagesToStructure(structure, settings) {
-  const basic = Number(structure.earnings?.get?.("Basic Salary") ?? structure.earnings?.["Basic Salary"] ?? 0);
+  const ctc = Number(structure.ctc) || 0;
   const percentages = settings.componentPercentages || new Map();
-  const getPct = (name: string) => (percentages instanceof Map ? percentages.get(name) : percentages[name]);
+  const fixedAmounts = settings.componentFixedAmounts || new Map();
+  const modes = settings.componentModes || new Map();
+  const modeOverrides = structure.componentModeOverrides || new Map();
+  const pctOverrides = structure.componentPercentageOverrides || new Map();
+  const fixedOverrides = structure.componentFixedAmountOverrides || new Map();
+  const getFromMap = (map: any, name: string) => (map instanceof Map ? map.get(name) : map[name]);
 
-  const earnings: Record<string, number> = { "Basic Salary": basic };
-  for (const c of settings.earningComponents) {
-    if (c === "Basic Salary") continue;
-    const pct = getPct(c);
-    if (pct !== undefined && pct !== null) earnings[c] = Math.round(basic * (Number(pct) / 100));
+  const getPct = (name: string) => {
+    const override = getFromMap(pctOverrides, name);
+    return override !== undefined && override !== null ? override : getFromMap(percentages, name);
+  };
+  const getFixed = (name: string) => {
+    const override = getFromMap(fixedOverrides, name);
+    return override !== undefined && override !== null ? override : getFromMap(fixedAmounts, name);
+  };
+  const getMode = (name: string) => {
+    if (PERCENT_ONLY_COMPONENTS.includes(name)) return "percent";
+    const override = getFromMap(modeOverrides, name);
+    if (override === "fixed" || override === "percent") return override;
+    const m = getFromMap(modes, name);
+    return m === "fixed" ? "fixed" : "percent";
+  };
+
+  function basicValue(): number {
+    if (getMode("Basic") === "fixed") {
+      const fixed = getFixed("Basic");
+      return fixed !== undefined && fixed !== null ? Number(fixed) || 0 : 0;
+    }
+    const pct = getPct("Basic");
+    return pct !== undefined && pct !== null ? Math.round(ctc * (Number(pct) / 100)) : 0;
   }
+  const basic = basicValue();
+
+  function componentValue(c: string): number | undefined {
+    if (getMode(c) === "fixed") {
+      const fixed = getFixed(c);
+      return fixed !== undefined && fixed !== null ? Number(fixed) || 0 : undefined;
+    }
+    const pct = getPct(c);
+    return pct !== undefined && pct !== null ? Math.round(basic * (Number(pct) / 100)) : undefined;
+  }
+
+  const earnings: Record<string, number> = { Basic: basic };
+  for (const c of settings.earningComponents) {
+    if (c === "Basic") continue;
+    const value = componentValue(c);
+    if (value !== undefined) earnings[c] = value;
+  }
+  const gross = Object.values(earnings).reduce((sum, v) => sum + (Number(v) || 0), 0);
+
+  const excludedSum = STATUTORY_EXCLUDED_COMPONENTS.reduce((sum, c) => sum + (Number(earnings[c]) || 0), 0);
+  const addBack = Math.max(0, Math.round(excludedSum - 0.5 * gross));
+  const statutoryWages =
+    STATUTORY_WAGE_BASE_COMPONENTS.reduce((sum, c) => sum + (Number(earnings[c]) || 0), 0) + addBack;
+  const pfWages = Math.min(statutoryWages, PF_WAGE_CEILING);
+  const employeePf = Math.round(pfWages * PF_RATE);
+  const esiWages = statutoryWages <= ESI_WAGE_CEILING ? statutoryWages : 0;
+  const employeeEsi = Math.round(esiWages * ESI_RATE);
+  // Employer-side contributions — same wage bases, employer's own cost, never
+  // deducted from the employee (not part of earnings/deductions/Gross/Net).
+  const employerPf = Math.round(pfWages * EMPLOYER_PF_RATE);
+  const employerEsi = Math.round(esiWages * EMPLOYER_ESI_RATE);
+
   const deductions: Record<string, number> = {};
   for (const c of settings.deductionComponents) {
-    const pct = getPct(c);
-    if (pct !== undefined && pct !== null) deductions[c] = Math.round(basic * (Number(pct) / 100));
+    if (c === "Employee PF") {
+      deductions[c] = employeePf;
+      continue;
+    }
+    if (c === "Employee ESI") {
+      deductions[c] = employeeEsi;
+      continue;
+    }
+    const value = componentValue(c);
+    if (value !== undefined) deductions[c] = value;
   }
 
   structure.earnings = earnings;
   structure.deductions = deductions;
-  structure.gross = Object.values(earnings).reduce((sum, v) => sum + (Number(v) || 0), 0);
+  structure.gross = gross;
+  structure.employerPf = employerPf;
+  structure.employerEsi = employerEsi;
+  // Sanity check only — never adjusts ctc itself. A mismatch means this
+  // employee's Structure Setting %/fixed split doesn't add back up to the
+  // CTC that was uploaded; saveStructureForMonth blocks on this.
+  structure.ctcMismatch = Math.round(gross + employerPf + employerEsi) !== Math.round(ctc);
+}
+
+// Resolves a blank CTC cell by carrying forward the employee's most recent
+// prior month's CTC. Used by both previewStructureUpload (so the CA sees the
+// carried-forward value before confirming) and confirmStructureUpload (as a
+// defensive fallback in case a row somehow arrives unresolved).
+async function resolveCtc(businessClientId, month: string, employeeName: string): Promise<{ ctc?: number; carriedForward?: boolean; reason?: string }> {
+  const nameKey = toNameKey(employeeName);
+  const employee = await ClientEmployee.findOne({ businessClientId, nameKey });
+  if (!employee) return { reason: `${employeeName}: CTC is required for a new employee` };
+
+  const previous = await ClientEmployeeSalaryStructure.findOne({ clientEmployeeId: employee._id, month: { $lt: month } }).sort({ month: -1 });
+  if (previous && previous.ctc > 0) return { ctc: previous.ctc, carriedForward: true };
+  return { reason: `${employeeName}: no previous CTC on record — please provide CTC this month` };
 }
 
 async function getOrCreateRun(businessClientId, month) {
@@ -69,7 +205,7 @@ async function getOrCreateRun(businessClientId, month) {
   return run;
 }
 
-// ── Firm-wide payroll settings (Employee ID format + rolling default %) ────
+// ── Firm-wide payroll settings (rolling default % + column display order) ──
 
 export const getFirmSettings = catchAsync(async (req, res) => {
   const settings = await getOrCreateFirmPayrollSettings(req.user.caFirmId);
@@ -77,12 +213,11 @@ export const getFirmSettings = catchAsync(async (req, res) => {
 });
 
 export const updateFirmSettings = catchAsync(async (req, res) => {
-  const { employeeIdPrefix, employeeIdPadding } = req.body;
+  const { columnOrder } = req.body;
   const settings = await getOrCreateFirmPayrollSettings(req.user.caFirmId);
-  if (employeeIdPrefix !== undefined) settings.employeeIdPrefix = employeeIdPrefix || "EMP-";
-  if (employeeIdPadding !== undefined) settings.employeeIdPadding = Number(employeeIdPadding) || 4;
+  if (Array.isArray(columnOrder)) settings.columnOrder = columnOrder;
   await settings.save();
-  res.json({ success: true, data: settings, message: "Employee ID format updated" });
+  res.json({ success: true, data: settings, message: "Column order updated" });
 });
 
 // ── Salary components list (which columns exist — separate from %) ─────────
@@ -106,29 +241,65 @@ export const updateSettings = catchAsync(async (req, res) => {
   res.json({ success: true, data: settings, message: "Payroll components updated" });
 });
 
-// ── Structure Settings: % of Basic Salary per component ─────────────────────
+// ── Structure Settings: Basic is % of CTC (or a flat fixed amount); every
+// other component is either % of Basic or a flat fixed amount ─────────────
 
 export const updateComponentPercentages = catchAsync(async (req, res) => {
   const client = await loadClient(req);
-  const { percentages, month } = req.body;
+  const { percentages, modes, fixedAmounts, month } = req.body;
   if (!percentages || typeof percentages !== "object") throw new ApiError(400, "Percentages are required");
 
   const settings = await getOrCreateSettings(client._id);
-  const requiredComponents = [...settings.earningComponents.filter((c) => c !== "Basic Salary"), ...settings.deductionComponents];
-  const missing = requiredComponents.filter((c) => percentages[c] === undefined || percentages[c] === null || percentages[c] === "");
+  // Employee PF/ESI are fixed statutory formulas, never a configured
+  // %/fixed value — see applyPercentagesToStructure. Basic IS configured
+  // here like any other component (its % is of CTC, not of itself).
+  const requiredComponents = [...settings.earningComponents, ...settings.deductionComponents].filter(
+    (c) => !NON_CONFIGURABLE_COMPONENTS.includes(c)
+  );
+
+  const modeMap = new Map<string, string>();
+  const percentMap = new Map<string, number>();
+  const fixedMap = new Map<string, number>();
+  const missing: string[] = [];
+
+  for (const c of requiredComponents) {
+    // The statutory PERCENT_ONLY_COMPONENTS always stay "percent", regardless
+    // of what the client sent — same enforcement as applyPercentagesToStructure.
+    const locked = PERCENT_ONLY_COMPONENTS.includes(c);
+    const mode = !locked && modes?.[c] === "fixed" ? "fixed" : "percent";
+    modeMap.set(c, mode);
+
+    if (mode === "fixed") {
+      const val = fixedAmounts?.[c];
+      if (val === undefined || val === null || val === "") {
+        missing.push(c);
+        continue;
+      }
+      fixedMap.set(c, Number(val) || 0);
+    } else {
+      const val = percentages[c];
+      if (val === undefined || val === null || val === "") {
+        missing.push(c);
+        continue;
+      }
+      percentMap.set(c, Number(val) || 0);
+    }
+  }
   if (missing.length > 0) {
-    throw new ApiError(400, `Set a percentage for: ${missing.join(", ")}`);
+    throw new ApiError(400, `Set a value for: ${missing.join(", ")}`);
   }
 
-  const percentMap = new Map<string, number>();
-  for (const c of requiredComponents) percentMap.set(c, Number(percentages[c]) || 0);
   settings.componentPercentages = percentMap;
+  settings.componentFixedAmounts = fixedMap;
+  settings.componentModes = modeMap;
   await settings.save();
 
   // Rolling firm-wide default — the next client to open Structure Settings
   // starts pre-filled with whatever was last saved anywhere in this firm.
   const firmSettings = await getOrCreateFirmPayrollSettings(req.user.caFirmId);
   firmSettings.defaultComponentPercentages = percentMap;
+  firmSettings.defaultComponentFixedAmounts = fixedMap;
+  firmSettings.defaultComponentModes = modeMap;
   await firmSettings.save();
 
   let recomputed = 0;
@@ -141,14 +312,67 @@ export const updateComponentPercentages = catchAsync(async (req, res) => {
     recomputed = structures.length;
   }
 
-  res.json({ success: true, data: settings, message: `Percentages saved${recomputed ? ` — ${recomputed} employee(s) recalculated` : ""}` });
+  res.json({ success: true, data: settings, message: `Structure Setting saved${recomputed ? ` — ${recomputed} employee(s) recalculated` : ""}` });
 });
 
-// ── Template download (always the same 4 static columns) ───────────────────
+// ── Template Settings: which columns appear on the downloadable/uploadable
+// monthly Excel, and in what order ─────────────────────────────────────────
+
+export const updateTemplateColumns = catchAsync(async (req, res) => {
+  const client = await loadClient(req);
+  const { columns } = req.body;
+  if (!Array.isArray(columns) || columns.length === 0) throw new ApiError(400, "At least one column is required");
+
+  const employeeNameColumns = columns.filter((c) => c.role === "employeeName");
+  if (employeeNameColumns.length !== 1) {
+    throw new ApiError(400, "Exactly one Employee Name column is required — it's how upload rows are matched to employees");
+  }
+
+  const settings = await getOrCreateSettings(client._id);
+  const existingByKey = new Map<string, any>((settings.templateColumns || []).map((c: any): [string, any] => [c.key, c]));
+  const usedKeys = new Set<string>();
+
+  const nextColumns: TemplateColumn[] = columns.map((col, index) => {
+    const role = TEMPLATE_COLUMN_ROLES.includes(col.role) ? col.role : "custom";
+    const label = String(col.label || "").trim();
+    if (!label) throw new ApiError(400, "Every column needs a label");
+
+    let key = col.key && existingByKey.has(col.key) ? col.key : undefined;
+    if (!key) {
+      // New column (no key, or a key we don't recognize) — mint a stable,
+      // unique-within-this-client slug from its label.
+      const base = slugify(label);
+      let candidate = base;
+      let n = 1;
+      while (usedKeys.has(candidate) || (existingByKey.has(candidate) && !columns.some((c) => c.key === candidate))) {
+        candidate = `${base}_${++n}`;
+      }
+      key = candidate;
+    }
+    usedKeys.add(key);
+
+    const dataType =
+      role === "custom" && TEMPLATE_COLUMN_DATA_TYPES.includes(col.dataType)
+        ? col.dataType
+        : role === "employeeName"
+          ? "text"
+          : "number";
+
+    return { key, label, role, dataType, order: index + 1 };
+  });
+
+  settings.templateColumns = nextColumns as any;
+  await settings.save();
+
+  res.json({ success: true, data: settings, message: "Template columns updated" });
+});
+
+// ── Template download (columns driven by Template Settings) ────────────────
 
 export const downloadTemplate = catchAsync(async (req, res) => {
   const client = await loadClient(req);
-  const rows = buildStructureTemplateRows();
+  const settings = await getOrCreateSettings(client._id);
+  const rows = buildStructureTemplateRows(settings.templateColumns as any);
   sendWorkbook(res, rows, "Salary Structure Template", `${client.name.replace(/[^a-z0-9]/gi, "_")}_Salary_Structure_Template.xlsx`);
 });
 
@@ -180,12 +404,33 @@ export const getStructureForMonth = catchAsync(async (req, res) => {
 // ── Upload: preview then confirm ────────────────────────────────────────
 
 export const previewStructureUpload = catchAsync(async (req, res) => {
-  await loadClient(req);
-  if (!isValidMonth(req.params.month)) throw new ApiError(400, "Invalid month, expected YYYY-MM");
+  const client = await loadClient(req);
+  const month = req.params.month;
+  if (!isValidMonth(month)) throw new ApiError(400, "Invalid month, expected YYYY-MM");
   if (!req.file) throw new ApiError(400, "No file uploaded");
 
-  const { rows, errors } = parseStructureWorkbook(req.file.buffer);
-  res.json({ success: true, data: rows, errors, fileName: req.file.originalname });
+  const settings = await getOrCreateSettings(client._id);
+  const { rows, errors } = parseStructureWorkbook(req.file.buffer, settings.templateColumns as any);
+
+  // A blank CTC cell (when a CTC column is configured at all) isn't an error
+  // from the parser — resolve it here by carrying forward the employee's most
+  // recent CTC, so the CA sees the actual value that will be saved.
+  const hasCtcColumn = (settings.templateColumns as any[]).some((c) => c.role === "ctc");
+  const resolvedRows: any[] = [];
+  for (const row of rows) {
+    if (hasCtcColumn && row.ctc === undefined) {
+      const resolved = await resolveCtc(client._id, month, row.employeeName);
+      if (resolved.ctc !== undefined) {
+        resolvedRows.push({ ...row, ctc: resolved.ctc, ctcCarriedForward: true });
+      } else {
+        errors.push(`Row ${row.row}: ${resolved.reason}`);
+      }
+    } else {
+      resolvedRows.push(row);
+    }
+  }
+
+  res.json({ success: true, data: resolvedRows, errors, fileName: req.file.originalname });
 });
 
 export const confirmStructureUpload = catchAsync(async (req, res) => {
@@ -198,6 +443,7 @@ export const confirmStructureUpload = catchAsync(async (req, res) => {
 
   const settings = await getOrCreateSettings(client._id);
   const hasPercentages = settings.componentPercentages && settings.componentPercentages.size > 0;
+  const hasCtcColumn = (settings.templateColumns as any[]).some((c: any) => c.role === "ctc");
   const results = { success: 0, failed: 0, errors: [] as string[] };
 
   for (const row of rows) {
@@ -205,12 +451,13 @@ export const confirmStructureUpload = catchAsync(async (req, res) => {
       const nameKey = toNameKey(row.employeeName);
       let employee = await ClientEmployee.findOne({ businessClientId: client._id, nameKey });
       if (!employee) {
-        const employeeCode = await generateNextEmployeeCode(req.user.caFirmId, client._id);
+        const employeeCode = await generateNextEmployeeCode(client.name, row.employeeName, client._id);
         employee = await ClientEmployee.create({
           businessClientId: client._id,
           employeeCode,
           name: row.employeeName,
           nameKey,
+          source: "excel_import",
         });
       }
 
@@ -224,19 +471,32 @@ export const confirmStructureUpload = catchAsync(async (req, res) => {
           deductions: {},
         });
       }
-      structure.payDays = row.payDays;
-      structure.totalWorkingDays = row.totalWorkingDays;
-      const earnings: Record<string, number> =
-        structure.earnings instanceof Map ? Object.fromEntries(structure.earnings) : { ...((structure.earnings as any) || {}) };
-      earnings["Basic Salary"] = row.basicSalary;
-      structure.earnings = earnings as any;
+      // payDays/totalWorkingDays/ctc are only present on the parsed row when
+      // that column is still configured in Template Settings — a client
+      // that's removed one keeps whatever was already stored (or 0 for a
+      // brand-new structure) rather than being force-reset here.
+      if (row.payDays !== undefined) structure.payDays = row.payDays;
+      if (row.totalWorkingDays !== undefined) structure.totalWorkingDays = row.totalWorkingDays;
+      if (row.ctc !== undefined) {
+        structure.ctc = row.ctc;
+      } else if (hasCtcColumn && !structure.ctc) {
+        // Defensive fallback — previewStructureUpload should already have
+        // resolved this, but resolve it again here in case confirm is ever
+        // reached with an unresolved row.
+        const resolved = await resolveCtc(client._id, month, row.employeeName);
+        if (resolved.ctc === undefined) throw new Error(resolved.reason);
+        structure.ctc = resolved.ctc;
+      }
+      structure.customFields = row.customFields as any;
 
       if (hasPercentages) {
         applyPercentagesToStructure(structure, settings);
       } else {
-        // earnings is the plain object assigned above — read from it directly
-        // rather than structure.earnings, which Mongoose has already cast to a Map.
-        structure.gross = Object.values(earnings).reduce((sum: number, v: any) => sum + (Number(v) || 0), 0);
+        // No percentages configured yet — there's nothing to derive Basic
+        // Salary/HRA/etc. from, so there's honestly nothing to pay out yet.
+        structure.earnings = {} as any;
+        structure.deductions = {} as any;
+        structure.gross = 0;
       }
       await structure.save();
       results.success++;
@@ -282,8 +542,11 @@ export const updateEmployeeStructure = catchAsync(async (req, res) => {
   const employee = await ClientEmployee.findOne({ _id: req.params.employeeId, businessClientId: client._id });
   if (!employee) throw new ApiError(404, "Employee not found");
 
-  const { earnings = {}, deductions = {}, payDays, totalWorkingDays, costCenter } = req.body;
-  const gross = Object.values(earnings).reduce((sum: number, v: any) => sum + (Number(v) || 0), 0);
+  // earnings/deductions are optional here — omit them (as the "Edit salary
+  // structure" modal now does) to leave the last computed values untouched;
+  // updateEmployeeComponentSettings below is what recomputes them off
+  // Basic Salary. Passing them explicitly still works as a raw manual override.
+  const { ctc, earnings, deductions, payDays, totalWorkingDays, costCenter, customFields } = req.body;
 
   const existing = await ClientEmployeeSalaryStructure.findOne({ clientEmployeeId: employee._id, month });
   const effectivePayDays = payDays !== undefined ? Number(payDays) : existing?.payDays || 0;
@@ -298,12 +561,15 @@ export const updateEmployeeStructure = catchAsync(async (req, res) => {
       businessClientId: client._id,
       clientEmployeeId: employee._id,
       month,
-      earnings,
-      deductions,
-      gross,
+      ...(earnings !== undefined
+        ? { earnings, gross: Object.values(earnings).reduce((sum: number, v: any) => sum + (Number(v) || 0), 0) }
+        : {}),
+      ...(deductions !== undefined ? { deductions } : {}),
+      ...(ctc !== undefined ? { ctc: Number(ctc) || 0 } : {}),
       ...(payDays !== undefined ? { payDays } : {}),
       ...(totalWorkingDays !== undefined ? { totalWorkingDays } : {}),
       ...(costCenter !== undefined ? { costCenter } : {}),
+      ...(customFields !== undefined ? { customFields } : {}),
     },
     { new: true, upsert: true }
   );
@@ -311,54 +577,61 @@ export const updateEmployeeStructure = catchAsync(async (req, res) => {
   res.json({ success: true, data: structure, message: "Salary structure updated" });
 });
 
-// ── Save structure for the month (unlocks Generate/Run/View downstream) ────
+// ── Per-employee Structure Setting overrides — lets one employee's DA/HRA/etc
+// differ from the client-wide Structure Setting without touching anyone else.
+// Wholesale-replaces this employee's override maps with whatever's sent (only
+// components the CA explicitly marked "custom for this employee" should be
+// included — anything omitted falls back to, and keeps following, the
+// client-wide setting), then recomputes this employee's earnings/deductions.
 
-export const saveStructureForMonth = catchAsync(async (req, res) => {
+export const updateEmployeeComponentSettings = catchAsync(async (req, res) => {
   const client = await loadClient(req);
   const month = req.params.month;
   if (!isValidMonth(month)) throw new ApiError(400, "Invalid month, expected YYYY-MM");
+  const employee = await ClientEmployee.findOne({ _id: req.params.employeeId, businessClientId: client._id });
+  if (!employee) throw new ApiError(404, "Employee not found");
 
-  const count = await ClientEmployeeSalaryStructure.countDocuments({ businessClientId: client._id, month });
-  if (count === 0) throw new ApiError(400, "Import this month's Excel before saving the salary structure");
+  const structure = await ClientEmployeeSalaryStructure.findOne({ clientEmployeeId: employee._id, month });
+  if (!structure) throw new ApiError(404, "Salary structure not found for this employee/month");
 
-  const run = await getOrCreateRun(client._id, month);
-  run.structureSaved = true;
-  run.structureSavedAt = new Date();
-  run.employeeCount = count;
-  await run.save();
+  const { modes = {}, percentages = {}, fixedAmounts = {} } = req.body;
+  structure.componentModeOverrides = new Map(Object.entries(modes)) as any;
+  structure.componentPercentageOverrides = new Map(Object.entries(percentages).map(([k, v]) => [k, Number(v) || 0])) as any;
+  structure.componentFixedAmountOverrides = new Map(Object.entries(fixedAmounts).map(([k, v]) => [k, Number(v) || 0])) as any;
 
-  await writeAuditLog(req, {
-    action: "client_payroll.structure_saved",
-    targetType: "BusinessClient",
-    targetId: client._id,
-    targetLabel: `${client.name} — ${month}`,
-  });
+  const settings = await getOrCreateSettings(client._id);
+  applyPercentagesToStructure(structure, settings);
+  await structure.save();
 
-  res.json({ success: true, data: run, message: "Salary structure saved" });
+  res.json({ success: true, data: structure, message: "Employee-specific structure setting saved" });
 });
 
-// ── Generate / Run ───────────────────────────────────────────────────────
+// ── Save structure for the month — computes payroll immediately, no separate
+// "Generate" step: as soon as the structure is saved, Total Gross/Deduction/
+// Net and every deduction component's total are ready to view. ────────────
 
-export const generatePayroll = catchAsync(async (req, res) => {
-  const client = await loadClient(req);
-  const month = req.params.month;
-  const run = await ClientPayrollRun.findOne({ businessClientId: client._id, month });
-  if (!run) throw new ApiError(404, "No salary structure found for this month — set it up on the Salary Structure page first");
-  if (!run.structureSaved) throw new ApiError(400, "Complete and save this month's Salary Structure before generating payroll");
-
-  const structures = await ClientEmployeeSalaryStructure.find({ businessClientId: client._id, month });
+// Prorates and totals every employee's structure for a month, writes the
+// per-employee ClientPayrollEntry snapshots, and updates the run's totals in
+// place (caller saves `run`). Shared by saveStructureForMonth (the only
+// trigger now) — used to be a separate "Generate" endpoint.
+async function computePayrollForMonth(client, run) {
+  const structures = await ClientEmployeeSalaryStructure.find({ businessClientId: client._id, month: run.month });
   if (structures.length === 0) throw new ApiError(400, "No employees in this month's salary structure");
 
   let totalGross = 0,
     totalDeduction = 0,
     totalNet = 0;
+  const deductionTotals: Record<string, number> = {};
 
   for (const structure of structures) {
     const fullGross = structure.gross || 0;
     const totalWorkingDays = structure.totalWorkingDays || 0;
     const payDays = structure.payDays || 0;
     const perDayRate = totalWorkingDays > 0 ? fullGross / totalWorkingDays : 0;
-    const prorationFactor = totalWorkingDays > 0 ? payDays / totalWorkingDays : 0;
+    // No Total Working Days tracked for this client (that column can be
+    // removed via Template Settings) — treat as full attendance rather than
+    // zeroing everyone's pay.
+    const prorationFactor = totalWorkingDays > 0 ? payDays / totalWorkingDays : 1;
 
     // Prorate every earning component (not just the top-line total) so the
     // per-component breakdown shown on the run detail page and printed on
@@ -373,10 +646,13 @@ export const generatePayroll = catchAsync(async (req, res) => {
     }
     const earnedGross = Object.values(proratedEarnings).reduce((sum, v) => sum + v, 0);
 
-    const deductionSum = Array.from((structure.deductions as Map<string, number>).values()).reduce(
-      (sum, v) => sum + (Number(v) || 0),
-      0
-    );
+    const deductionsSource: Map<string, number> = structure.deductions as any;
+    let deductionSum = 0;
+    for (const [component, value] of deductionsSource.entries()) {
+      const amount = Number(value) || 0;
+      deductionSum += amount;
+      deductionTotals[component] = (deductionTotals[component] || 0) + amount;
+    }
     const net = Math.max(0, earnedGross - deductionSum);
 
     await ClientPayrollEntry.findOneAndUpdate(
@@ -393,6 +669,8 @@ export const generatePayroll = catchAsync(async (req, res) => {
         totalDeduction: deductionSum,
         perDayRate: Math.round(perDayRate * 100) / 100,
         net,
+        employerPf: structure.employerPf || 0,
+        employerEsi: structure.employerEsi || 0,
       },
       { new: true, upsert: true }
     );
@@ -408,9 +686,43 @@ export const generatePayroll = catchAsync(async (req, res) => {
   run.totalGross = totalGross;
   run.totalDeduction = totalDeduction;
   run.totalNet = totalNet;
+  run.deductionTotals = deductionTotals as any;
+}
+
+export const saveStructureForMonth = catchAsync(async (req, res) => {
+  const client = await loadClient(req);
+  const month = req.params.month;
+  if (!isValidMonth(month)) throw new ApiError(400, "Invalid month, expected YYYY-MM");
+
+  const count = await ClientEmployeeSalaryStructure.countDocuments({ businessClientId: client._id, month });
+  if (count === 0) throw new ApiError(400, "Import this month's Excel before saving the salary structure");
+
+  const mismatched = await ClientEmployeeSalaryStructure.find({ businessClientId: client._id, month, ctcMismatch: true });
+  if (mismatched.length > 0) {
+    const employeeIds = mismatched.map((s) => s.clientEmployeeId);
+    const employees = await ClientEmployee.find({ _id: { $in: employeeIds } }).select("name").lean();
+    const nameById = new Map(employees.map((e) => [String(e._id), e.name]));
+    const names = mismatched.map((s) => nameById.get(String(s.clientEmployeeId)) || "Unknown employee");
+    throw new ApiError(
+      400,
+      `CTC mismatch for: ${names.join(", ")} — Gross + Employer PF + Employer ESI must equal CTC. Please check and update.`
+    );
+  }
+
+  const run = await getOrCreateRun(client._id, month);
+  run.structureSaved = true;
+  run.structureSavedAt = new Date();
+  await computePayrollForMonth(client, run);
   await run.save();
 
-  res.json({ success: true, data: run, message: "Payroll generated" });
+  await writeAuditLog(req, {
+    action: "client_payroll.structure_saved",
+    targetType: "BusinessClient",
+    targetId: client._id,
+    targetLabel: `${client.name} — ${month}`,
+  });
+
+  res.json({ success: true, data: run, message: "Salary structure saved and payroll generated" });
 });
 
 export const runPayroll = catchAsync(async (req, res) => {
@@ -418,7 +730,7 @@ export const runPayroll = catchAsync(async (req, res) => {
   const month = req.params.month;
   const run = await ClientPayrollRun.findOne({ businessClientId: client._id, month });
   if (!run) throw new ApiError(404, "Payroll run not found");
-  if (run.status !== "Generated") throw new ApiError(400, "Generate payroll before running it");
+  if (run.status !== "Generated") throw new ApiError(400, "Save this month's Salary Structure before running payroll");
 
   run.status = "Completed";
   run.runBy = req.user.id;
@@ -491,6 +803,8 @@ export const exportRun = catchAsync(async (req, res) => {
     settings.deductionComponents.forEach((c) => (row[c] = deductions[c] ?? 0));
     row["Total Deductions"] = e.totalDeduction;
     row["Net Pay"] = e.net;
+    row["Employer PF"] = e.employerPf ?? 0;
+    row["Employer ESI"] = e.employerEsi ?? 0;
     return row;
   });
 

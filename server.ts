@@ -17,7 +17,7 @@ const httpServer = createServer(app);
 // HRMS's realtime chat/notifications — attached to the same shared server.
 const io = new Server(httpServer, {
   cors: {
-    origin: ["http://localhost:5173"],
+    origin: [process.env.CLIENT_URL || "http://localhost:5173"],
     credentials: true,
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type", "Authorization"],

@@ -40,6 +40,13 @@ const businessClientSchema = new mongoose.Schema(
     // automatically alongside it — so Compliance Tool (which only ever looks
     // at Lead records) can track filings for every Business Client too.
     leadId: { type: mongoose.Schema.Types.ObjectId, ref: "Lead", default: null },
+    // Public self-onboarding link the Business Client shares with their own
+    // employees (mainly relevant when useHrms: false — HRMS clients manage
+    // employees inside HRMS itself). Generated once at creation; the link is
+    // live immediately — each employee "authenticates" by entering their own
+    // Employee ID (see publicEmployeeFormController.ts), not a shared
+    // company-wide password. See publicBusinessClientRoutes.ts.
+    employeeFormToken: { type: String, unique: true, sparse: true, index: true },
   },
   { timestamps: true }
 );

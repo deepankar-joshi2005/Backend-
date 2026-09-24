@@ -41,11 +41,17 @@ export function verifyRefreshToken(token) {
   return jwt.verify(token, process.env.JWT_REFRESH_SECRET);
 }
 
+// "none" is required when frontend and backend are on different origins
+// (e.g. Vercel + Render) — browsers silently drop a "lax" cookie on those
+// cross-site requests, which breaks refresh without any visible error.
+// "none" requires secure:true, which COOKIE_SECURE already guarantees in production.
+const REFRESH_COOKIE_SAME_SITE = process.env.COOKIE_SECURE === "true" ? "none" : "lax";
+
 export function setRefreshCookie(res, token) {
   res.cookie(REFRESH_COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.COOKIE_SECURE === "true",
-    sameSite: "lax",
+    sameSite: REFRESH_COOKIE_SAME_SITE,
     path: REFRESH_COOKIE_PATH,
     maxAge: parseExpiryToMs(process.env.JWT_REFRESH_EXPIRES || "7d"),
   });
@@ -55,7 +61,7 @@ export function clearRefreshCookie(res) {
   res.clearCookie(REFRESH_COOKIE_NAME, {
     httpOnly: true,
     secure: process.env.COOKIE_SECURE === "true",
-    sameSite: "lax",
+    sameSite: REFRESH_COOKIE_SAME_SITE,
     path: REFRESH_COOKIE_PATH,
   });
 }

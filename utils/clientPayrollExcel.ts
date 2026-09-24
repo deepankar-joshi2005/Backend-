@@ -1,12 +1,14 @@
 import xlsx from "xlsx";
 
-// Static, minimal template per the client's own request — Employee Name,
-// Basic Salary and Pay Days are all they can reliably give us each month;
-// Total Working Days is included so the per-day rate is unambiguous. This is
-// intentionally NOT connected to a client's configured salary components
-// (those are filled in later via Structure Settings' percentages).
-const TEMPLATE_HEADERS = ["Employee Name", "Basic Salary", "Pay Days", "Total Working Days"];
 const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+export interface TemplateColumn {
+  key: string;
+  label: string;
+  role: "employeeName" | "ctc" | "payDays" | "totalWorkingDays" | "custom";
+  dataType: "text" | "number" | "date";
+  order: number;
+}
 
 export function sendWorkbook(res, rows: Record<string, any>[], sheetName: string, filename: string) {
   const sheet = xlsx.utils.json_to_sheet(rows);
@@ -18,49 +20,79 @@ export function sendWorkbook(res, rows: Record<string, any>[], sheetName: string
   res.send(buffer);
 }
 
-// Always the same static shape — a single blank sample row, regardless of
-// this client's existing employees or configured components.
-export function buildStructureTemplateRows() {
-  return [
-    {
-      "Employee Name": "Sample Employee",
-      "Basic Salary": "",
-      "Pay Days": "",
-      "Total Working Days": "",
-    },
-  ];
+function sortColumns(columns: TemplateColumn[]) {
+  return [...columns].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+// A single blank sample row shaped by this client's current Template Settings
+// — column set and order are entirely driven by templateColumns now, not a
+// fixed shape. See ClientPayrollSettings.templateColumns.
+export function buildStructureTemplateRows(templateColumns: TemplateColumn[]) {
+  const row: Record<string, any> = {};
+  for (const col of sortColumns(templateColumns)) {
+    row[col.label] = col.role === "employeeName" ? "Sample Employee" : "";
+  }
+  return [row];
 }
 
 export interface ParsedStructureRow {
   row: number;
   employeeName: string;
-  basicSalary: number;
-  payDays: number;
-  totalWorkingDays: number;
+  // Present only when the corresponding role column is still configured —
+  // a client that has deleted e.g. "Total Working Days" from their template
+  // simply won't have totalWorkingDays on parsed rows.
+  // ctc is also undefined when the column is configured but the cell was left
+  // blank — that's not an error here, it means "carry forward last month's
+  // CTC for this employee", resolved later where the DB is reachable (see
+  // resolveCtc in clientPayrollController.ts).
+  ctc?: number;
+  // Set (in clientPayrollController.ts, not here) when a blank CTC cell was
+  // resolved by carrying forward the employee's most recent prior CTC.
+  ctcCarriedForward?: boolean;
+  payDays?: number;
+  totalWorkingDays?: number;
+  customFields: Record<string, string>;
 }
 
-export function parseStructureWorkbook(buffer: Buffer): { rows: ParsedStructureRow[]; errors: string[] } {
+export function parseStructureWorkbook(
+  buffer: Buffer,
+  templateColumns: TemplateColumn[]
+): { rows: ParsedStructureRow[]; errors: string[] } {
   const workbook = xlsx.read(buffer, { type: "buffer", cellDates: true });
   const sheetName = workbook.SheetNames[0];
   const jsonData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 }) as any[][];
 
-  const errors: string[] = [];
   if (jsonData.length < 2) {
     return { rows: [], errors: ["File must contain a header row and at least one data row"] };
   }
 
   const headers = (jsonData[0] as string[]).map((h) => String(h || "").trim());
   const colIndex = (label: string) => headers.indexOf(label);
-  const missing = TEMPLATE_HEADERS.filter((h) => colIndex(h) === -1);
+
+  const byRole = (role: TemplateColumn["role"]) => templateColumns.find((c) => c.role === role);
+  const employeeNameCol = byRole("employeeName");
+  if (!employeeNameCol) {
+    return { rows: [], errors: ["No Employee Name column is configured — add one in Template Settings"] };
+  }
+  const ctcCol = byRole("ctc");
+  const payDaysCol = byRole("payDays");
+  const totalWorkingDaysCol = byRole("totalWorkingDays");
+  const customCols = templateColumns.filter((c) => c.role === "custom");
+
+  const missing: string[] = [];
+  for (const col of [employeeNameCol, ctcCol, payDaysCol, totalWorkingDaysCol]) {
+    if (col && colIndex(col.label) === -1) missing.push(col.label);
+  }
   if (missing.length > 0) {
     return { rows: [], errors: [`Missing required column(s): ${missing.join(", ")}`] };
   }
 
-  const nameIdx = colIndex("Employee Name");
-  const basicIdx = colIndex("Basic Salary");
-  const payDaysIdx = colIndex("Pay Days");
-  const totalDaysIdx = colIndex("Total Working Days");
+  const nameIdx = colIndex(employeeNameCol.label);
+  const ctcIdx = ctcCol ? colIndex(ctcCol.label) : -1;
+  const payDaysIdx = payDaysCol ? colIndex(payDaysCol.label) : -1;
+  const totalDaysIdx = totalWorkingDaysCol ? colIndex(totalWorkingDaysCol.label) : -1;
 
+  const errors: string[] = [];
   const rows: ParsedStructureRow[] = [];
   const dataRows = jsonData.slice(1);
 
@@ -70,39 +102,69 @@ export function parseStructureWorkbook(buffer: Buffer): { rows: ParsedStructureR
 
     const employeeName = String(raw[nameIdx] ?? "").trim();
     if (!employeeName) {
-      errors.push(`Row ${rowNum}: Employee Name is required`);
+      errors.push(`Row ${rowNum}: ${employeeNameCol.label} is required`);
       return;
     }
 
-    const basicSalary = Number(raw[basicIdx]);
-    if (raw[basicIdx] === undefined || raw[basicIdx] === "" || Number.isNaN(basicSalary) || basicSalary < 0) {
-      errors.push(`Row ${rowNum}: Basic Salary must be a non-negative number`);
+    let ctc: number | undefined;
+    if (ctcCol) {
+      const cellBlank = raw[ctcIdx] === undefined || raw[ctcIdx] === "";
+      if (!cellBlank) {
+        ctc = Number(raw[ctcIdx]);
+        if (Number.isNaN(ctc) || ctc < 0) {
+          errors.push(`Row ${rowNum}: ${ctcCol.label} must be a non-negative number`);
+          return;
+        }
+      }
+      // Blank CTC cell is left as undefined here (not an error) — the caller
+      // resolves it by carrying forward the employee's most recent CTC.
+    }
+
+    let payDays: number | undefined;
+    if (payDaysCol) {
+      payDays = Number(raw[payDaysIdx]);
+      if (raw[payDaysIdx] === undefined || raw[payDaysIdx] === "" || Number.isNaN(payDays) || payDays < 0) {
+        errors.push(`Row ${rowNum}: ${payDaysCol.label} must be a non-negative number`);
+        return;
+      }
+    }
+
+    let totalWorkingDays: number | undefined;
+    if (totalWorkingDaysCol) {
+      totalWorkingDays = Number(raw[totalDaysIdx]);
+      if (
+        raw[totalDaysIdx] === undefined ||
+        raw[totalDaysIdx] === "" ||
+        Number.isNaN(totalWorkingDays) ||
+        totalWorkingDays <= 0
+      ) {
+        errors.push(`Row ${rowNum}: ${totalWorkingDaysCol.label} must be a positive number`);
+        return;
+      }
+    }
+
+    if (payDays !== undefined && totalWorkingDays !== undefined && payDays > totalWorkingDays) {
+      errors.push(
+        `Row ${rowNum}: ${payDaysCol!.label} (${payDays}) cannot exceed ${totalWorkingDaysCol!.label} (${totalWorkingDays})`
+      );
       return;
     }
 
-    const payDays = Number(raw[payDaysIdx]);
-    if (raw[payDaysIdx] === undefined || raw[payDaysIdx] === "" || Number.isNaN(payDays) || payDays < 0) {
-      errors.push(`Row ${rowNum}: Pay Days must be a non-negative number`);
-      return;
+    const customFields: Record<string, string> = {};
+    for (const col of customCols) {
+      const idx = colIndex(col.label);
+      if (idx === -1) continue;
+      const cell = raw[idx];
+      if (cell === undefined || cell === null || cell === "") {
+        customFields[col.key] = "";
+      } else if (cell instanceof Date) {
+        customFields[col.key] = cell.toISOString().slice(0, 10);
+      } else {
+        customFields[col.key] = String(cell);
+      }
     }
 
-    const totalWorkingDays = Number(raw[totalDaysIdx]);
-    if (
-      raw[totalDaysIdx] === undefined ||
-      raw[totalDaysIdx] === "" ||
-      Number.isNaN(totalWorkingDays) ||
-      totalWorkingDays <= 0
-    ) {
-      errors.push(`Row ${rowNum}: Total Working Days must be a positive number`);
-      return;
-    }
-
-    if (payDays > totalWorkingDays) {
-      errors.push(`Row ${rowNum}: Pay Days (${payDays}) cannot exceed Total Working Days (${totalWorkingDays})`);
-      return;
-    }
-
-    rows.push({ row: rowNum, employeeName, basicSalary, payDays, totalWorkingDays });
+    rows.push({ row: rowNum, employeeName, ctc, payDays, totalWorkingDays, customFields });
   });
 
   return { rows, errors };

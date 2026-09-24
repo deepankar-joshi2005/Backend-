@@ -25,6 +25,11 @@ const clientPayrollEntrySchema = new mongoose.Schema(
     totalDeduction: { type: Number, default: 0 },
     perDayRate: { type: Number, default: 0 },
     net: { type: Number, default: 0 },
+    // Employer-side PF/ESI contribution, snapshotted from the structure at
+    // the time payroll was generated — not part of Gross/Net, never deducted
+    // from the employee, unaffected by proration (matches deductions).
+    employerPf: { type: Number, default: 0 },
+    employerEsi: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
