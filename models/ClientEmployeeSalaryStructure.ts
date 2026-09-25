@@ -39,11 +39,11 @@ const clientEmployeeSalaryStructureSchema = new mongoose.Schema(
     employerPf: { type: Number, default: 0 },
     employerEsi: { type: Number, default: 0 },
     // Sanity check, recomputed alongside everything else in
-    // applyPercentagesToStructure: uploaded CTC should equal Gross + Employer
-    // PF + Employer ESI (CTC itself is never adjusted to match — a mismatch
-    // means this employee's Structure Setting %/fixed split doesn't add back
-    // up to the CTC that was uploaded). Blocks saveStructureForMonth until
-    // fixed — see clientPayrollController.ts.
+    // applyPercentagesToStructure: Gross + Employer PF + Employer ESI must not
+    // exceed the uploaded CTC (landing under is fine; CTC itself is never
+    // adjusted to match — a mismatch means this employee's Structure Setting
+    // %/fixed split adds up to more than the CTC that was uploaded). Blocks
+    // saveStructureForMonth until fixed — see clientPayrollController.ts.
     ctcMismatch: { type: Boolean, default: false },
     // Per-employee overrides of the client-wide Structure Setting
     // (ClientPayrollSettings.componentModes/Percentages/FixedAmounts) — only

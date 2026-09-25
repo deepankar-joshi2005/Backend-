@@ -1,6 +1,19 @@
 import { z } from "zod";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
+const phoneSchema = z
+  .string()
+  .trim()
+  .regex(/^[6-9]\d{9}$/, "Enter a valid 10-digit mobile number")
+  .optional()
+  .or(z.literal(""));
+const gstinSchema = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .regex(/^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}$/, "Invalid GSTIN")
+  .optional()
+  .or(z.literal(""));
 
 const loanSchema = z.object({
   active: z.boolean().optional(),
@@ -28,8 +41,8 @@ const profileFields = {
   clientId: objectId.nullable().optional(),
   name: z.string().trim().min(2, "Name is too short"),
   email: z.string().trim().toLowerCase().email("Invalid email").optional().or(z.literal("")),
-  phone: z.string().trim().optional().or(z.literal("")),
-  gstin: z.string().trim().optional().or(z.literal("")),
+  phone: phoneSchema,
+  gstin: gstinSchema,
   company: z.string().trim().optional().or(z.literal("")),
   designation: z.string().trim().optional().or(z.literal("")),
   experienceYears: z.coerce.number().nonnegative().optional(),

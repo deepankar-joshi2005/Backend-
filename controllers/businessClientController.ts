@@ -34,12 +34,21 @@ const SALT_ROUNDS = Number(process.env.BCRYPT_SALT_ROUNDS) || 10;
 async function provisionHrmsForClient(
   client,
   firm,
-  { adminName, adminEmail, adminPassword, planTierId }: { adminName: string; adminEmail: string; adminPassword?: string; planTierId: string },
+  {
+    adminName,
+    adminEmail,
+    adminPassword,
+    planTierId,
+    planTier: prefetchedPlanTier,
+  }: { adminName: string; adminEmail: string; adminPassword?: string; planTierId: string; planTier?: any },
   req
 ) {
   if (!adminEmail) throw new ApiError(400, "An email is required to create the HRMS login");
   if (!planTierId) throw new ApiError(400, "Select an HRMS plan for this client");
-  const planTier = await HrmsPlanTier.findById(planTierId);
+  // Reuse the caller's lookup when it already has one (createBusinessClient
+  // fetches it upfront to validate before doing anything else) — avoids a
+  // redundant round trip on the hot "add client" path.
+  const planTier = prefetchedPlanTier || (await HrmsPlanTier.findById(planTierId));
   if (!planTier) throw new ApiError(404, "Selected HRMS plan not found");
 
   // Every Business Client already gets a business_client_admin login at
@@ -52,7 +61,7 @@ async function provisionHrmsForClient(
   if (existingOtherAdmin) throw new ApiError(409, "An account with this admin email already exists");
 
   const usingOwnPassword = !!adminPassword;
-  const tempPassword = usingOwnPassword ? null : generateTempPassword();
+  const tempPassword = usingOwnPassword ? null : generateTempPassword(client.name);
   const passwordHash = await bcrypt.hash(usingOwnPassword ? adminPassword : tempPassword, SALT_ROUNDS);
 
   if (admin) {
@@ -95,20 +104,22 @@ async function provisionHrmsForClient(
     console.error("Failed to provision HRMS company:", err.message);
   }
 
-  try {
-    const settings = await getSystemSettings();
-    const { subject, html } = credentialsWelcomeEmail({
-      platformName: settings.platformName,
-      firmName: client.name,
-      recipientName: admin.name,
-      email: admin.email,
-      password: usingOwnPassword ? adminPassword : tempPassword,
-      loginUrl: `${process.env.CLIENT_URL}/login`,
-    });
-    await sendMail({ to: admin.email, subject, html });
-  } catch (err) {
-    console.error("Failed to send business client admin welcome email:", err.message);
-  }
+  // Fire-and-forget — the temp password is already returned in the API
+  // response (FirmCreatedNotice/TempPasswordNotice show it on-screen), so the
+  // request doesn't need to wait on an SMTP round trip to complete.
+  getSystemSettings()
+    .then((settings) => {
+      const { subject, html } = credentialsWelcomeEmail({
+        platformName: settings.platformName,
+        firmName: client.name,
+        recipientName: admin.name,
+        email: admin.email,
+        password: usingOwnPassword ? adminPassword : tempPassword,
+        loginUrl: `${process.env.CLIENT_URL}/login`,
+      });
+      return sendMail({ to: admin.email, subject, html });
+    })
+    .catch((err) => console.error("Failed to send business client admin welcome email:", err.message));
 
   return { admin, tempPassword };
 }
@@ -128,7 +139,7 @@ async function createClientAdminLogin(
   if (existingAdmin) throw new ApiError(409, "An account with this admin email already exists");
 
   const usingOwnPassword = !!adminPassword;
-  const tempPassword = usingOwnPassword ? null : generateTempPassword();
+  const tempPassword = usingOwnPassword ? null : generateTempPassword(client.name);
   const passwordHash = await bcrypt.hash(usingOwnPassword ? adminPassword : tempPassword, SALT_ROUNDS);
 
   const admin = await User.create({
@@ -142,20 +153,20 @@ async function createClientAdminLogin(
     createdBy: req.user.id,
   });
 
-  try {
-    const settings = await getSystemSettings();
-    const { subject, html } = credentialsWelcomeEmail({
-      platformName: settings.platformName,
-      firmName: client.name,
-      recipientName: admin.name,
-      email: admin.email,
-      password: usingOwnPassword ? adminPassword : tempPassword,
-      loginUrl: `${process.env.CLIENT_URL}/login`,
-    });
-    await sendMail({ to: admin.email, subject, html });
-  } catch (err) {
-    console.error("Failed to send business client admin welcome email:", err.message);
-  }
+  // Fire-and-forget — same reasoning as provisionHrmsForClient above.
+  getSystemSettings()
+    .then((settings) => {
+      const { subject, html } = credentialsWelcomeEmail({
+        platformName: settings.platformName,
+        firmName: client.name,
+        recipientName: admin.name,
+        email: admin.email,
+        password: usingOwnPassword ? adminPassword : tempPassword,
+        loginUrl: `${process.env.CLIENT_URL}/login`,
+      });
+      return sendMail({ to: admin.email, subject, html });
+    })
+    .catch((err) => console.error("Failed to send business client admin welcome email:", err.message));
 
   return { admin, tempPassword };
 }
@@ -245,6 +256,7 @@ export const listMyBusinessClients = catchAsync(async (req, res) => {
 export const createBusinessClient = catchAsync(async (req, res) => {
   const {
     name,
+    clientName,
     email,
     phone,
     leadId,
@@ -293,36 +305,46 @@ export const createBusinessClient = catchAsync(async (req, res) => {
   // (Module Scope doc, Section 4) only ever tracks filings against a Lead —
   // this is what lets a Business Client get compliance tasks at all. Reuse an
   // already-converted lead when provisioning HRMS from the CRM "Clients" tab;
-  // otherwise (direct onboarding here) create one automatically.
+  // otherwise (direct onboarding here) reuse a matching unlinked converted
+  // lead if one already exists (e.g. this client was converted in CRM first),
+  // so onboarding here doesn't leave that original lead orphaned as a
+  // duplicate "Individual client" card in Payroll Management once this
+  // Business Client is deleted — only create a fresh one as a last resort.
   let lead;
   if (leadId) {
     lead = await Lead.findOne({ _id: leadId, caFirmId: firm._id, status: "converted" });
     if (!lead) throw new ApiError(404, "Converted lead not found");
     if (lead.businessClientId) throw new ApiError(409, "This client already has a Business Client account");
   } else {
-    lead = await Lead.create({
-      name,
-      leadType: "business",
-      phone: phone || "Not provided",
-      email,
-      source: "other",
-      status: "converted",
-      caFirmId: firm._id,
-      createdBy: req.user.id,
-      statusHistory: [
-        { status: "new", changedBy: req.user.id, changedByName: req.currentUser.name },
-        {
-          status: "converted",
-          changedBy: req.user.id,
-          changedByName: req.currentUser.name,
-          note: "Auto-created for direct Business Client onboarding",
-        },
-      ],
-    });
+    if (email) {
+      lead = await Lead.findOne({ caFirmId: firm._id, status: "converted", businessClientId: null, email: email.toLowerCase().trim() });
+    }
+    if (!lead) {
+      lead = await Lead.create({
+        name,
+        leadType: "business",
+        phone: phone || "Not provided",
+        email,
+        source: "other",
+        status: "converted",
+        caFirmId: firm._id,
+        createdBy: req.user.id,
+        statusHistory: [
+          { status: "new", changedBy: req.user.id, changedByName: req.currentUser.name },
+          {
+            status: "converted",
+            changedBy: req.user.id,
+            changedByName: req.currentUser.name,
+            note: "Auto-created for direct Business Client onboarding",
+          },
+        ],
+      });
+    }
   }
 
   const client = await BusinessClient.create({
     name: name || lead.name,
+    clientName,
     email: email || lead.email,
     phone: phone || lead.phone,
     clientType,
@@ -355,7 +377,7 @@ export const createBusinessClient = catchAsync(async (req, res) => {
       ? await provisionHrmsForClient(
           client,
           firm,
-          { adminName: resolvedAdminName, adminEmail: resolvedAdminEmail, adminPassword, planTierId },
+          { adminName: resolvedAdminName, adminEmail: resolvedAdminEmail, adminPassword, planTierId, planTier },
           req
         )
       : await createClientAdminLogin(client, firm, { adminName: resolvedAdminName, adminEmail: resolvedAdminEmail, adminPassword }, req);
@@ -561,6 +583,7 @@ export const getMyHrmsSsoToken = catchAsync(async (req, res) => {
 export const updateMyBusinessClient = catchAsync(async (req, res) => {
   const {
     name,
+    clientName,
     email,
     phone,
     isActive,
@@ -579,6 +602,7 @@ export const updateMyBusinessClient = catchAsync(async (req, res) => {
   if (!client) throw new ApiError(404, "Business client not found");
 
   if (name !== undefined) client.name = name;
+  if (clientName !== undefined) client.clientName = clientName;
   if (email !== undefined) client.email = email;
   if (phone !== undefined) client.phone = phone;
   if (isActive !== undefined) client.isActive = isActive;
@@ -613,8 +637,17 @@ export const deleteBusinessClient = catchAsync(async (req, res) => {
   // Deleted (not just unlinked) — a Lead left with businessClientId: null
   // would re-match listPayrollEligibleClients' "converted, not yet
   // provisioned" query and reappear in Payroll Management under the same
-  // name, looking like the client was never actually deleted.
-  if (client.leadId) await Lead.findByIdAndDelete(client.leadId);
+  // name, looking like the client was never actually deleted. Match on both
+  // client.leadId and the reverse businessClientId link (rather than only
+  // client.leadId) so a lead stays in sync even if only one side of the link
+  // was ever set. caFirmId-scoped and built from concrete ids only — never
+  // hand an empty/undefined clause to $or, since a stripped-undefined `_id`
+  // clause would silently match (and delete) every Lead in the collection.
+  const leadIdsToDelete = [client.leadId].filter(Boolean);
+  await Lead.deleteMany({
+    caFirmId: client.caFirmId,
+    $or: [{ _id: { $in: leadIdsToDelete } }, { businessClientId: client._id }],
+  });
   // Non-HRMS payroll data has nowhere else to point once the client is gone
   // — clean it all up rather than leaving orphaned records behind. Resolve
   // the run IDs before deleting anything in parallel, so ClientPayrollEntry's
@@ -649,7 +682,7 @@ export const resetBusinessClientAdminPassword = catchAsync(async (req, res) => {
   if (!admin) throw new ApiError(404, "Business client admin not found");
 
   const usingOwnPassword = !!newPassword;
-  const tempPassword = usingOwnPassword ? null : generateTempPassword();
+  const tempPassword = usingOwnPassword ? null : generateTempPassword(admin.name);
   admin.passwordHash = await bcrypt.hash(usingOwnPassword ? newPassword : tempPassword, SALT_ROUNDS);
   admin.mustChangePassword = !usingOwnPassword;
   admin.tokenVersion += 1;

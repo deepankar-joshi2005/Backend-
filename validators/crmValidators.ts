@@ -8,6 +8,9 @@ const clearableDate = z.preprocess((v) => (v === "" ? null : v), z.coerce.date()
 const optionalNumber = z.preprocess((v) => (v === "" ? undefined : v), z.coerce.number().nonnegative().optional());
 const clearableNumber = z.preprocess((v) => (v === "" ? null : v), z.coerce.number().nonnegative().nullable().optional());
 const optionalEnum = (values) => z.preprocess((v) => (v === "" ? undefined : v), z.enum(values).optional());
+// Indian mobile numbers: 10 digits, starting 6-9.
+const phoneSchema = z.string().trim().regex(/^[6-9]\d{9}$/, "Enter a valid 10-digit mobile number");
+const optionalPhoneSchema = phoneSchema.optional().or(z.literal(""));
 
 const LEAD_TYPES = ["individual", "business", "startup", "company", "existing_client_referral"];
 const BUSINESS_TYPES = ["proprietorship", "partnership", "llp", "private_limited", "other"];
@@ -41,9 +44,9 @@ export const createLeadSchema = z.object({
     .object({
       name: z.string().trim().min(2, "Name is too short"),
       leadType: z.enum(LEAD_TYPES, { errorMap: () => ({ message: "Select a lead type" }) }),
-      phone: z.string().trim().min(6, "A valid mobile number is required"),
+      phone: phoneSchema,
       email: z.string().trim().toLowerCase().email("Invalid email").optional().or(z.literal("")),
-      alternatePhone: z.string().trim().optional(),
+      alternatePhone: optionalPhoneSchema,
 
       company: z.string().trim().optional(),
       businessType: optionalEnum(BUSINESS_TYPES),
@@ -69,9 +72,9 @@ export const updateLeadSchema = z.object({
     .object({
       name: z.string().trim().min(2).optional(),
       leadType: z.enum(LEAD_TYPES).optional(),
-      phone: z.string().trim().min(6).optional(),
+      phone: optionalPhoneSchema,
       email: z.string().trim().toLowerCase().email("Invalid email").optional().or(z.literal("")),
-      alternatePhone: z.string().trim().optional(),
+      alternatePhone: optionalPhoneSchema,
 
       company: z.string().trim().optional(),
       businessType: optionalEnum(BUSINESS_TYPES),

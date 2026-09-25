@@ -25,12 +25,19 @@ const gstinSchema = z
   .regex(/^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}$/, "Invalid GSTIN")
   .optional()
   .or(z.literal(""));
+// Indian mobile numbers: 10 digits, starting 6-9.
+const phoneSchema = z
+  .string()
+  .trim()
+  .regex(/^[6-9]\d{9}$/, "Enter a valid 10-digit mobile number")
+  .optional()
+  .or(z.literal(""));
 
 export const createCaFirmSchema = z.object({
   body: z.object({
     name: z.string().trim().min(2, "Firm name is too short"),
     email: z.string().trim().toLowerCase().email("Invalid email").optional().or(z.literal("")),
-    phone: z.string().trim().optional(),
+    phone: phoneSchema,
     icaiRegistrationNumber: z.string().trim().min(5, "Enter a valid ICAI firm registration number (FRN)").optional().or(z.literal("")),
     constitutionType: z.enum(["proprietorship", "partnership", "llp"], {
       errorMap: () => ({ message: "Select the firm's constitution type" }),
@@ -59,7 +66,7 @@ export const updateCaFirmSchema = z.object({
   body: z.object({
     name: z.string().trim().min(2).optional(),
     email: z.string().trim().toLowerCase().email("Invalid email").optional().or(z.literal("")),
-    phone: z.string().trim().optional(),
+    phone: phoneSchema,
     // "" means "leave unchanged" here (the edit form always sends these keys, even
     // when the firm has no value yet) — transform it away instead of failing validation.
     icaiRegistrationNumber: z

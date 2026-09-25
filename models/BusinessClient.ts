@@ -12,6 +12,10 @@ export const SERVICES = ["gst", "income_tax", "tds", "accounting", "roc_complian
 const businessClientSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
+    // Distinct from `name` (the business/trade name) — the client's own
+    // personal name, e.g. for individual/proprietorship clients where the
+    // two commonly differ. Optional since not every client type needs it.
+    clientName: { type: String, trim: true },
     clientType: { type: String, enum: CLIENT_TYPES, default: "other" },
     pan: { type: String, trim: true, uppercase: true },
     gstin: { type: String, trim: true, uppercase: true },

@@ -178,9 +178,11 @@ function applyPercentagesToStructure(structure, settings) {
   structure.employerPf = employerPf;
   structure.employerEsi = employerEsi;
   // Sanity check only — never adjusts ctc itself. A mismatch means this
-  // employee's Structure Setting %/fixed split doesn't add back up to the
-  // CTC that was uploaded; saveStructureForMonth blocks on this.
-  structure.ctcMismatch = Math.round(gross + employerPf + employerEsi) !== Math.round(ctc);
+  // employee's Structure Setting %/fixed split adds up to more than the CTC
+  // that was uploaded (Gross + Employer PF + Employer ESI must not exceed
+  // CTC — it's fine for it to land under); saveStructureForMonth blocks on
+  // this.
+  structure.ctcMismatch = Math.round(gross + employerPf + employerEsi) > Math.round(ctc);
 }
 
 // Resolves a blank CTC cell by carrying forward the employee's most recent
@@ -577,6 +579,38 @@ export const updateEmployeeStructure = catchAsync(async (req, res) => {
   res.json({ success: true, data: structure, message: "Salary structure updated" });
 });
 
+// Bulk-removes imported rows for a month (e.g. rows imported by mistake) —
+// only touches this month's ClientEmployeeSalaryStructure rows, never the
+// underlying ClientEmployee record. Blocked once the structure is saved for
+// the month (payroll may already be generated off it) — re-import instead,
+// which correctly resets structureSaved and lets edits happen before the
+// next save.
+export const deleteStructureRows = catchAsync(async (req, res) => {
+  const client = await loadClient(req);
+  const month = req.params.month;
+  if (!isValidMonth(month)) throw new ApiError(400, "Invalid month, expected YYYY-MM");
+  const { employeeIds } = req.body;
+  if (!Array.isArray(employeeIds) || employeeIds.length === 0) {
+    throw new ApiError(400, "Select at least one employee to remove");
+  }
+
+  const run = await getOrCreateRun(client._id, month);
+  if (run.structureSaved) {
+    throw new ApiError(400, "This month's salary structure is already saved — rows can no longer be removed");
+  }
+
+  const result = await ClientEmployeeSalaryStructure.deleteMany({
+    businessClientId: client._id,
+    month,
+    clientEmployeeId: { $in: employeeIds },
+  });
+
+  run.employeeCount = await ClientEmployeeSalaryStructure.countDocuments({ businessClientId: client._id, month });
+  await run.save();
+
+  res.json({ success: true, message: `Removed ${result.deletedCount} row(s)`, deletedCount: result.deletedCount });
+});
+
 // ── Per-employee Structure Setting overrides — lets one employee's DA/HRA/etc
 // differ from the client-wide Structure Setting without touching anyone else.
 // Wholesale-replaces this employee's override maps with whatever's sent (only
@@ -705,7 +739,7 @@ export const saveStructureForMonth = catchAsync(async (req, res) => {
     const names = mismatched.map((s) => nameById.get(String(s.clientEmployeeId)) || "Unknown employee");
     throw new ApiError(
       400,
-      `CTC mismatch for: ${names.join(", ")} — Gross + Employer PF + Employer ESI must equal CTC. Please check and update.`
+      `CTC mismatch for: ${names.join(", ")} — Gross + Employer PF + Employer ESI must not exceed CTC. Please check and update.`
     );
   }
 

@@ -94,6 +94,7 @@ export const login = async (req: Request, res: Response) => {
       isSystemAdmin: user.isSystemAdmin || false,
       companyLogo: company?.logo || null,
       companyStamp: company?.stamp || null,
+      isTrainee: user.isTrainee || false,
     },
   });
 };
@@ -225,6 +226,7 @@ export const getCurrentUser = async (req: AuthRequest, res: Response) => {
         profilePicture: user.profilePicture || null,
         companyLogo: company?.logo || null,
         companyStamp: company?.stamp || null,
+        isTrainee: user.isTrainee || false,
       },
     });
   } catch (error: any) {

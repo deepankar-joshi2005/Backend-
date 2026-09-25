@@ -120,7 +120,7 @@ export const createCaFirm = catchAsync(async (req, res) => {
   // If the super admin sets a password directly, the admin can log in with it
   // immediately (no forced reset). Otherwise fall back to a one-time temp password.
   const usingOwnPassword = !!adminPassword;
-  const tempPassword = usingOwnPassword ? null : generateTempPassword();
+  const tempPassword = usingOwnPassword ? null : generateTempPassword(firm.name);
   let admin;
   try {
     const passwordHash = await bcrypt.hash(usingOwnPassword ? adminPassword : tempPassword, SALT_ROUNDS);
@@ -191,7 +191,7 @@ export const resetFirmAdminPassword = catchAsync(async (req, res) => {
   if (!admin) throw new ApiError(404, "CA firm admin not found");
 
   const usingOwnPassword = !!newPassword;
-  const tempPassword = usingOwnPassword ? null : generateTempPassword();
+  const tempPassword = usingOwnPassword ? null : generateTempPassword(admin.name);
   admin.passwordHash = await bcrypt.hash(usingOwnPassword ? newPassword : tempPassword, SALT_ROUNDS);
   admin.mustChangePassword = !usingOwnPassword;
   admin.tokenVersion += 1;

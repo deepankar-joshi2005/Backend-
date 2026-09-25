@@ -198,6 +198,14 @@ const userSchema = new mongoose.Schema(
 
     /* ================= BILLING ================= */
     activeSince: { type: Date, default: null },
+
+    /* ================= TRAINING / ONBOARDING ================= */
+    // While true, authMiddleware restricts this user to only the /auth and
+    // /my-training API paths (see middleware/auth.ts) and the frontend routes
+    // them to the Training-only layout instead of their normal role UI. Only
+    // ever set true explicitly (Add User checkbox) — default false so this
+    // field is a no-op for every pre-existing user.
+    isTrainee: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

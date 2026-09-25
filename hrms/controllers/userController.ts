@@ -9,6 +9,8 @@ import Branch from "../models/hrms/Branch";
 import Department from "../models/hrms/Department";
 import Designation from "../models/hrms/Designation";
 import CostCenter from "../models/hrms/CostCenter";
+import TrainingModule from "../models/hrms/TrainingModule";
+import TrainingProfile from "../models/hrms/TrainingProfile";
 import { ROLES } from "../constants";
 import { AuthRequest } from "../middleware/auth";
 import { sendPasswordResetEmail } from "../utils/email";
@@ -99,6 +101,9 @@ export const createUser = async (req: AuthRequest, res: Response) => {
       managerId,
       employmentType,
       costCenterId,
+
+      /* TRAINING */
+      isTrainee,
     } = req.body;
 
     // Handle profile picture if uploaded
@@ -196,7 +201,36 @@ export const createUser = async (req: AuthRequest, res: Response) => {
 
       /* ===== BILLING ===== */
       activeSince: new Date(), // Start tracking usage from creation
+
+      /* ===== TRAINING ===== */
+      isTrainee: isTrainee === true || isTrainee === "true",
     });
+
+    /* ================= AUTO-ASSIGN TRAINING MODULES ================= */
+    // Every active module that targets this employee's department (or every
+    // department, departmentId: null) is assigned automatically — no manual
+    // "stage candidate" step. HR can still add/remove modules later from the
+    // trainee's detail page if the department's module list changes.
+    if (user.isTrainee) {
+      try {
+        const activeModules = await TrainingModule.find({
+          companyId: targetCompanyId,
+          isActive: true,
+          $or: [{ departmentId }, { departmentId: null }],
+        }).sort({ sequenceOrder: 1 });
+
+        await TrainingProfile.create({
+          companyId: targetCompanyId,
+          user: user._id,
+          departmentId,
+          assignedModules: activeModules.map((m) => m._id),
+          status: "In-Training",
+          isEligible: true,
+        });
+      } catch (err) {
+        console.error("Failed to create training profile:", err);
+      }
+    }
 
     /* ================= SEND EMAIL ================= */
     try {

@@ -26,6 +26,16 @@ function isAllowedForCaProxy(req: Request): boolean {
   return false;
 }
 
+// While a user is a trainee (User.isTrainee === true — set at Add User time,
+// cleared by HR's "Complete Onboarding" action), every module besides their
+// own training experience must be unreachable, not just hidden in the UI.
+const TRAINEE_ALLOWED_PATH_SEGMENTS = ["/auth", "/my-training"];
+
+function isAllowedForTrainee(req: Request): boolean {
+  const path = req.originalUrl.split("?")[0].toLowerCase();
+  return TRAINEE_ALLOWED_PATH_SEGMENTS.some((seg) => path.includes(seg));
+}
+
 export const authMiddleware = async (
   req: AuthRequest,
   res: Response,
@@ -66,6 +76,13 @@ export const authMiddleware = async (
       return res.status(403).json({
         message: "This CA-linked session only has access to Payroll.",
         isCaProxyRestricted: true,
+      });
+    }
+
+    if (user.isTrainee && !isAllowedForTrainee(req)) {
+      return res.status(403).json({
+        message: "You are under training. Please complete your training to access this module.",
+        isTrainingRestricted: true,
       });
     }
 

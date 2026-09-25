@@ -185,15 +185,46 @@ const DEFAULT_POLICIES = [
     ],
     legalReference: "Industry Practice",
   },
+  {
+    no: 16,
+    name: "Insurance Policy",
+    requirements: [
+      "Group health/life cover details",
+      "Eligibility & enrollment",
+      "Premium contribution split",
+      "Claim process",
+      "Coverage renewal",
+    ],
+    legalReference: "Company Policy",
+  },
+  {
+    no: 17,
+    name: "Medical Policy",
+    requirements: [
+      "Medical reimbursement limits",
+      "Approved hospitals/network",
+      "Sick leave documentation",
+      "Pre-existing condition disclosure",
+      "Claim submission process",
+    ],
+    legalReference: "Company Policy",
+  },
 ];
+
+// Inserts any DEFAULT_POLICIES entries (matched by `no`) that aren't in the DB
+// yet — not just a one-time "seed if totally empty" — so adding a new default
+// policy here (e.g. Insurance/Medical) shows up for installs that already
+// seeded the earlier list, without a manual migration.
+async function backfillDefaultPolicies() {
+  const existingNos = new Set((await HrPolicy.find().select("no").lean()).map((p) => p.no));
+  const missing = DEFAULT_POLICIES.filter((p) => !existingNos.has(p.no));
+  if (missing.length > 0) await HrPolicy.insertMany(missing);
+}
 
 // Seed default policies if none exist
 export const seedHrPolicies = async (_req: Request, res: Response) => {
   try {
-    const existing = await HrPolicy.countDocuments();
-    if (existing === 0) {
-      await HrPolicy.insertMany(DEFAULT_POLICIES);
-    }
+    await backfillDefaultPolicies();
     const policies = await HrPolicy.find().sort({ no: 1 });
     res.json(policies);
   } catch (err) {
@@ -205,8 +236,8 @@ export const seedHrPolicies = async (_req: Request, res: Response) => {
 export const getHrPolicies = async (_req: Request, res: Response) => {
   try {
     let policies = await HrPolicy.find().sort({ no: 1 });
-    if (policies.length === 0) {
-      await HrPolicy.insertMany(DEFAULT_POLICIES);
+    if (policies.length < DEFAULT_POLICIES.length) {
+      await backfillDefaultPolicies();
       policies = await HrPolicy.find().sort({ no: 1 });
     }
     res.json(policies);

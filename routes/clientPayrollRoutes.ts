@@ -11,6 +11,7 @@ import {
   confirmStructureUpload,
   updateCostCenter,
   updateEmployeeStructure,
+  deleteStructureRows,
   updateEmployeeComponentSettings,
   saveStructureForMonth,
   runPayroll,
@@ -42,6 +43,7 @@ router.post("/structure/:month/upload/preview", upload.single("file"), previewSt
 router.post("/structure/:month/upload/confirm", confirmStructureUpload);
 router.put("/structure/:month/cost-center", updateCostCenter);
 router.put("/structure/:month/employees/:employeeId", updateEmployeeStructure);
+router.delete("/structure/:month/employees", deleteStructureRows);
 router.put("/structure/:month/employees/:employeeId/component-settings", updateEmployeeComponentSettings);
 // Saving the structure now generates payroll immediately (no separate
 // "Generate" step) — see computePayrollForMonth in the controller.

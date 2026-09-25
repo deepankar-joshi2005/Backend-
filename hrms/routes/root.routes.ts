@@ -59,6 +59,8 @@ import hrPolicyRouter from "./hrms/hrPolicy.routes";
 import PaymentRequestRouter from "./hrms/paymentRequest.routes";
 import DocumentTypeRouter from "./hrms/documentType.routes";
 import DataManagementRouter from "./dataManagement.routes";
+import trainingManagementRouter from "./hrms/trainingManagement.routes";
+import myTrainingRouter from "./hrms/myTraining.routes";
 
 const rootRouter = Router();
 
@@ -124,6 +126,13 @@ rootRouter.use("/parking-assignments", authMiddleware, subscriptionMiddleware, P
 rootRouter.use("/non-it-assets", authMiddleware, subscriptionMiddleware, NonITAssetRouter);
 rootRouter.use("/overtime", authMiddleware, subscriptionMiddleware, OvertimeRouter);
 rootRouter.use("/profile-update", authMiddleware, subscriptionMiddleware, ProfileUpdateRouter);
+
+// Training / Onboarding LMS — /training is HR/Admin/SuperAdmin authoring &
+// review, /my-training is the trainee's own learning experience. Both are
+// mounted before the trainee access gate can apply (the gate lives inside
+// authMiddleware itself), so a trainee stays restricted to /my-training only.
+rootRouter.use("/training", authMiddleware, subscriptionMiddleware, trainingManagementRouter);
+rootRouter.use("/my-training", authMiddleware, subscriptionMiddleware, myTrainingRouter);
 
 // States & Districts (Shared infrastructure)
 rootRouter.use("/states", stateDistrictRouter);

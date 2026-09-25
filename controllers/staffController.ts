@@ -62,7 +62,7 @@ export const createStaff = catchAsync(async (req, res) => {
   }
 
   const usingOwnPassword = !!password;
-  const tempPassword = usingOwnPassword ? null : generateTempPassword();
+  const tempPassword = usingOwnPassword ? null : generateTempPassword(name);
   const passwordHash = await bcrypt.hash(usingOwnPassword ? password : tempPassword, SALT_ROUNDS);
 
   const staff = await User.create({
@@ -141,7 +141,7 @@ export const resetStaffPassword = catchAsync(async (req, res) => {
   if (!staff) throw new ApiError(404, "Staff member not found");
 
   const usingOwnPassword = !!newPassword;
-  const tempPassword = usingOwnPassword ? null : generateTempPassword();
+  const tempPassword = usingOwnPassword ? null : generateTempPassword(staff.name);
   staff.passwordHash = await bcrypt.hash(usingOwnPassword ? newPassword : tempPassword, SALT_ROUNDS);
   staff.mustChangePassword = !usingOwnPassword;
   staff.tokenVersion += 1;
