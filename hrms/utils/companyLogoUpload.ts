@@ -20,11 +20,15 @@ const storage = multer.diskStorage({
     },
 });
 
+const ALLOWED_MIMETYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+
 const fileFilter = (req: any, file: any, cb: any) => {
-    if (file.mimetype === "image/jpeg" || file.mimetype === "image/png") {
+    if (ALLOWED_MIMETYPES.includes(file.mimetype)) {
         cb(null, true);
     } else {
-        cb(new Error("Only .jpeg and .png formats are allowed!"), false);
+        // statusCode lets the shared errorHandler return 400 instead of
+        // falling through to a generic 500 for this rejection.
+        cb(Object.assign(new Error("Only JPEG, PNG, or WEBP images are allowed."), { statusCode: 400 }), false);
     }
 };
 

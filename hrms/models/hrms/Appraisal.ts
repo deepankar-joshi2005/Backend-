@@ -9,6 +9,7 @@ export interface IAppraisal extends Document {
   startDate: Date;
   endDate: Date;
   department: string; // "ALL" or department name
+  applicableFor: mongoose.Types.ObjectId[]; // specific employees this appraisal applies to; empty = all employees
   status: "DRAFT" | "ACTIVE" | "CLOSED";
   progress: number; // 0 - 100
   createdBy: mongoose.Types.ObjectId;
@@ -25,6 +26,7 @@ const AppraisalSchema = new Schema<IAppraisal>(
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
     department: { type: String, default: "ALL" },
+    applicableFor: [{ type: Schema.Types.ObjectId, ref: "User" }],
     status: {
       type: String,
       enum: ["DRAFT", "ACTIVE", "CLOSED"],

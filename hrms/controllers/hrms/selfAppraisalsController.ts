@@ -36,14 +36,15 @@ export const getEmployeeAppraisals = async (
   res: Response
 ) => {
   const employeeId = req.user.id;
-  const departmentId = req.user.departmentId;
 
   const appraisals = await Appraisal.find({
     status: "ACTIVE",
     $or: [
-      { department: "ALL" },
-      { department: departmentId },
-      { employees: employeeId },
+      // No specific employees selected ("All Employees") — visible to everyone
+      { applicableFor: { $exists: false } },
+      { applicableFor: { $size: 0 } },
+      // Specific employees selected — visible only to those employees
+      { applicableFor: employeeId },
     ],
   }).sort({ createdAt: -1 });
 

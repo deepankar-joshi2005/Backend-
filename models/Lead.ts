@@ -102,6 +102,13 @@ const leadSchema = new mongoose.Schema(
     // Set once this client is also provisioned into HRMS as a Business Client —
     // lets the CRM "Clients" tab show HRMS status without a second lookup.
     businessClientId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessClient", default: null },
+    // True only for a Lead auto-created purely as the required backing record
+    // for a Business Client added directly via /firm-admin/clients (Compliance
+    // Tool needs every client to have a Lead — see createBusinessClient). It
+    // never went through the actual CRM pipeline, so the CRM page's own lists
+    // (Pipeline, Clients tab, dashboard) exclude it — only genuine won leads
+    // belong there.
+    hiddenFromCrm: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

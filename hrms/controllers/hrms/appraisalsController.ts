@@ -21,7 +21,9 @@ export const createAppraisal = async (req: AuthRequest, res: Response) => {
 /* ================= GET ALL ================= */
 export const getAppraisals = async (_req: AuthRequest, res: Response) => {
   try {
-    const list = await Appraisal.find().sort({ createdAt: -1 });
+    const list = await Appraisal.find()
+      .populate("applicableFor", "name employeeId")
+      .sort({ createdAt: -1 });
     res.json(list);
   } catch (error) {
     res.status(500).json({ message: "Failed to fetch appraisals" });
@@ -31,7 +33,10 @@ export const getAppraisals = async (_req: AuthRequest, res: Response) => {
 /* ================= GET BY ID ================= */
 export const getAppraisalById = async (req: AuthRequest, res: Response) => {
   try {
-    const appraisal = await Appraisal.findById(req.params.id);
+    const appraisal = await Appraisal.findById(req.params.id).populate(
+      "applicableFor",
+      "name employeeId"
+    );
     if (!appraisal) {
       return res.status(404).json({ message: "Appraisal not found" });
     }

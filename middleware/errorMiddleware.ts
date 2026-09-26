@@ -26,7 +26,9 @@ export const errorHandler = (err, req, res, next) => {
     message = "Invalid or expired token";
   } else if (err.name === "MulterError") {
     statusCode = 400;
-    message = err.code === "LIMIT_FILE_SIZE" ? "File is too large (max 10MB)" : err.message;
+    // Don't hard-code a size — the limit varies per upload route (2MB for
+    // logos/stamps, 5MB for resumes, 10MB for job documents, ...).
+    message = err.code === "LIMIT_FILE_SIZE" ? "File is too large for this upload." : err.message;
   }
 
   if (statusCode >= 500) {

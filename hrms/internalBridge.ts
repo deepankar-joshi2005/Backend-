@@ -55,9 +55,13 @@ export async function provisionCompanyForCa({
     phone: adminPhone || "",
     caFirmId,
     caFirmName,
-    subscriptionPlan: "ACTIVE",
-    subscriptionStatus: "PAID",
-    subscriptionEndDate: new Date(now.getFullYear() + 10, now.getMonth(), now.getDate()),
+    // Onboarding only creates the login — it does NOT grant access. The
+    // client must subscribe from the HRMS billing page before the
+    // subscriptionMiddleware/SubscriptionOverlay gate lets them use any
+    // feature (see subscriptionMiddleware.ts / useSubscriptionExpiration.ts).
+    subscriptionPlan: "EXPIRED",
+    subscriptionStatus: "PENDING",
+    subscriptionEndDate: null,
     employeeLimit: employeeLimit || 0,
     planTier: planTier || null,
   });

@@ -40,16 +40,22 @@ async function provisionHrmsForClient(
     adminPassword,
     planTierId,
     planTier: prefetchedPlanTier,
-  }: { adminName: string; adminEmail: string; adminPassword?: string; planTierId: string; planTier?: any },
+  }: { adminName: string; adminEmail: string; adminPassword?: string; planTierId?: string; planTier?: any },
   req
 ) {
   if (!adminEmail) throw new ApiError(400, "An email is required to create the HRMS login");
-  if (!planTierId) throw new ApiError(400, "Select an HRMS plan for this client");
+  // A plan is optional at provisioning time — leaving it unselected still
+  // creates the HRMS company, just left unsubscribed (subscriptionMiddleware
+  // blocks it with a "please subscribe" prompt until the client pays via
+  // billing, at which point employeeLimit/planTier get set for real anyway).
   // Reuse the caller's lookup when it already has one (createBusinessClient
   // fetches it upfront to validate before doing anything else) — avoids a
   // redundant round trip on the hot "add client" path.
-  const planTier = prefetchedPlanTier || (await HrmsPlanTier.findById(planTierId));
-  if (!planTier) throw new ApiError(404, "Selected HRMS plan not found");
+  let planTier = prefetchedPlanTier || null;
+  if (!planTier && planTierId) {
+    planTier = await HrmsPlanTier.findById(planTierId);
+    if (!planTier) throw new ApiError(404, "Selected HRMS plan not found");
+  }
 
   // Every Business Client already gets a business_client_admin login at
   // creation time now, regardless of useHrms (see createBusinessClient) — so
@@ -93,8 +99,8 @@ async function provisionHrmsForClient(
       adminPhone: client.phone,
       caFirmId: firm._id.toString(),
       caFirmName: firm.name,
-      employeeLimit: planTier.maxEmployees ?? 999999,
-      planTier: planTier.name,
+      employeeLimit: planTier?.maxEmployees ?? 0,
+      planTier: planTier?.name,
     });
     if (provisioned) {
       client.hrmsCompanyId = provisioned.hrmsCompanyId;
@@ -287,8 +293,7 @@ export const createBusinessClient = catchAsync(async (req, res) => {
   if (existingAdmin) throw new ApiError(409, "An account with this admin email already exists");
 
   let planTier = null;
-  if (wantsHrms) {
-    if (!planTierId) throw new ApiError(400, "Select an HRMS plan for this client");
+  if (wantsHrms && planTierId) {
     planTier = await HrmsPlanTier.findById(planTierId);
     if (!planTier) throw new ApiError(404, "Selected HRMS plan not found");
   }
@@ -329,6 +334,9 @@ export const createBusinessClient = catchAsync(async (req, res) => {
         status: "converted",
         caFirmId: firm._id,
         createdBy: req.user.id,
+        // Never went through the CRM pipeline — keep it out of the CRM page's
+        // own lead lists (see the model comment on this field).
+        hiddenFromCrm: true,
         statusHistory: [
           { status: "new", changedBy: req.user.id, changedByName: req.currentUser.name },
           {

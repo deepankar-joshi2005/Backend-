@@ -58,11 +58,10 @@ const goalSchema = new Schema<IGoal>(
 );
 
 // 🔄 Auto status update based on progress
-goalSchema.pre("save", function (next) {
+goalSchema.pre("save", function () {
   if (this.progress === 0) this.status = "Not Started";
   else if (this.progress >= 100) this.status = "Completed";
   else this.status = "In Progress";
-  next();
 });
 
 export default mongoose.model<IGoal>("Goal", goalSchema);

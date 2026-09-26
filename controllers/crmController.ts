@@ -25,6 +25,10 @@ async function assertAssignee(caFirmId, assignedTo) {
 export const listLeads = catchAsync(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
   const filter = scopeToRole(req, { caFirmId: req.user.caFirmId });
+  // Compliance Tool's client picker needs every client (including ones added
+  // directly via /firm-admin/clients, whose backing Lead is hiddenFromCrm) —
+  // only the CRM page's own lead lists default to hiding those.
+  if (req.query.includeHidden !== "true") filter.hiddenFromCrm = { $ne: true };
   if (req.query.status) filter.status = req.query.status;
   else if (req.query.excludeConverted === "true") filter.status = { $ne: "converted" };
   if (req.query.assignedTo && req.user.role === "ca_firm_admin") filter.assignedTo = req.query.assignedTo;
@@ -39,6 +43,7 @@ export const listLeads = catchAsync(async (req, res) => {
   const [leads, total] = await Promise.all([
     Lead.find(filter)
       .populate("assignedTo", "name")
+      .populate("businessClientId", "useHrms")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit),
@@ -202,7 +207,7 @@ export const addLeadNote = catchAsync(async (req, res) => {
 
 // Role Matrix: "View CRM reports/dashboards: Admin Full, Staff Own performance only."
 export const getCrmDashboard = catchAsync(async (req, res) => {
-  const baseFilter = scopeToRole(req, { caFirmId: req.user.caFirmId });
+  const baseFilter = scopeToRole(req, { caFirmId: req.user.caFirmId, hiddenFromCrm: { $ne: true } });
   const now = new Date();
 
   const [byStatus, dueForFollowUp, overdueFollowUp, recentLeads] = await Promise.all([

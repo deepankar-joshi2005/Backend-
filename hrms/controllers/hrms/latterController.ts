@@ -1,6 +1,6 @@
 /** @format */
 
-import { Request, Response } from "express";
+import { Response } from "express";
 import Letter from "../../models/hrms/Letter";
 import { AuthRequest } from "../../middleware/auth";
 import User from "../../models/User";
@@ -69,8 +69,18 @@ export const sendLetter = async (req: AuthRequest, res: Response) => {
 /* ======================================================
    GET LETTERS BY USER (Employee)
    ====================================================== */
-export const getLettersByUser = async (req: Request, res: Response) => {
+export const getLettersByUser = async (req: AuthRequest, res: Response) => {
   try {
+    const requesterId = (req.user.id || req.user._id)?.toString();
+    const elevatedRoles = ["hr-admin", "admin", "superadmin", "hrms-admin"];
+    const isElevated = elevatedRoles.includes((req.user.role || "").toLowerCase());
+
+    if (!isElevated && req.params.userId !== requesterId) {
+      return res.status(403).json({
+        message: "You can only view your own letters.",
+      });
+    }
+
     const letters = await Letter.find({
       user: req.params.userId,
     })
