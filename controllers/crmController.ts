@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Lead from "../models/Lead";
 import User from "../models/User";
 import ApiError from "../utils/ApiError";
@@ -8,7 +9,12 @@ import { writeAuditLog } from "../utils/writeAuditLog";
 // Per Role Matrix Section 4.2: CA Firm Staff only ever see leads assigned to them;
 // CA Firm Admin sees everything in the firm.
 function scopeToRole(req, filter) {
-  if (req.user.role === "ca_firm_staff") filter.assignedTo = req.user.id;
+  // req.user.assignedTo/caFirmId travel as plain strings (see middleware/auth.ts)
+  // — .find()/.countDocuments() cast those against the schema automatically,
+  // but .aggregate()'s $match does not, so it silently matches zero documents
+  // against the ObjectId-typed fields on Lead. Cast explicitly so both query
+  // styles behave the same.
+  if (req.user.role === "ca_firm_staff") filter.assignedTo = new mongoose.Types.ObjectId(req.user.id);
   return filter;
 }
 
@@ -207,7 +213,10 @@ export const addLeadNote = catchAsync(async (req, res) => {
 
 // Role Matrix: "View CRM reports/dashboards: Admin Full, Staff Own performance only."
 export const getCrmDashboard = catchAsync(async (req, res) => {
-  const baseFilter = scopeToRole(req, { caFirmId: req.user.caFirmId, hiddenFromCrm: { $ne: true } });
+  const baseFilter = scopeToRole(req, {
+    caFirmId: new mongoose.Types.ObjectId(req.user.caFirmId),
+    hiddenFromCrm: { $ne: true },
+  });
   const now = new Date();
 
   const [byStatus, dueForFollowUp, overdueFollowUp, recentLeads] = await Promise.all([

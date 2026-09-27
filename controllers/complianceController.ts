@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import ComplianceTask from "../models/ComplianceTask";
 import User from "../models/User";
 import ApiError from "../utils/ApiError";
@@ -8,7 +9,11 @@ import { writeAuditLog } from "../utils/writeAuditLog";
 // Per Role Matrix Section 4.3: CA Firm Staff only manage tasks assigned to them;
 // CA Firm Admin sees everything in the firm.
 function scopeToRole(req, filter) {
-  if (req.user.role === "ca_firm_staff") filter.assignedTo = req.user.id;
+  // req.user.id travels as a plain string (see middleware/auth.ts) —
+  // .find()/.countDocuments() cast that against the schema automatically,
+  // but .aggregate()'s $match does not, so it silently matches zero documents
+  // against the ObjectId-typed assignedTo field (see getComplianceDashboard).
+  if (req.user.role === "ca_firm_staff") filter.assignedTo = new mongoose.Types.ObjectId(req.user.id);
   return filter;
 }
 
@@ -158,7 +163,7 @@ export const addTaskNote = catchAsync(async (req, res) => {
 // the upcoming/overdue calendar is firm-wide for both Admin and Staff ("View
 // compliance calendar/reminders: Admin Full, Staff Full").
 export const getComplianceDashboard = catchAsync(async (req, res) => {
-  const scopedFilter = scopeToRole(req, { caFirmId: req.user.caFirmId });
+  const scopedFilter = scopeToRole(req, { caFirmId: new mongoose.Types.ObjectId(req.user.caFirmId) });
   const firmFilter = { caFirmId: req.user.caFirmId };
   const now = new Date();
   const weekOut = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
