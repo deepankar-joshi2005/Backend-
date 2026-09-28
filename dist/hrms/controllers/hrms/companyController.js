@@ -226,7 +226,6 @@ const uploadCompanyStamp = async (req, res) => {
 exports.uploadCompanyStamp = uploadCompanyStamp;
 /**
  * 🗑 Delete Company
- * DELETE /api/companies/:id
  */
 const deleteCompany = async (req, res) => {
     try {
