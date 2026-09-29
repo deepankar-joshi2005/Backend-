@@ -2,7 +2,13 @@
 // its internal functions directly instead of making an HTTP request to
 // itself, which is both faster and avoids a real hang seen with self-referential
 // fetch() calls under load in some environments.
-import { provisionCompanyForCa, issueSsoTokenFor, issueCaProxySsoToken, verifyHrmsCredentials } from "../hrms/internalBridge";
+import {
+  provisionCompanyForCa,
+  issueSsoTokenFor,
+  issueCaProxySsoToken,
+  verifyHrmsCredentials,
+  updateCompanyOwnerCredentials,
+} from "../hrms/internalBridge";
 
 // Creates the matching Company + admin account in HRMS for a newly onboarded
 // Business Client. The admin's password hash travels as-is (both sides use
@@ -18,6 +24,8 @@ export async function provisionHrmsCompany({
   caFirmName,
   employeeLimit,
   planTier,
+  ownerEmail,
+  ownerPasswordHash,
 }: {
   companyName: string;
   adminName: string;
@@ -28,8 +36,31 @@ export async function provisionHrmsCompany({
   caFirmName?: string;
   employeeLimit?: number;
   planTier?: string;
+  ownerEmail?: string;
+  ownerPasswordHash?: string;
 }) {
-  return provisionCompanyForCa({ companyName, adminName, adminEmail, adminPasswordHash, adminPhone, caFirmId, caFirmName, employeeLimit, planTier });
+  return provisionCompanyForCa({
+    companyName,
+    adminName,
+    adminEmail,
+    adminPasswordHash,
+    adminPhone,
+    caFirmId,
+    caFirmName,
+    employeeLimit,
+    planTier,
+    ownerEmail,
+    ownerPasswordHash,
+  });
+}
+
+// Lets CA Firm Admin set/change a Business Client's payroll owner-approval
+// credentials after initial onboarding (Edit Business Client flow).
+export async function updateHrmsCompanyOwnerCredentials(
+  hrmsCompanyId: string,
+  creds: { ownerEmail?: string; ownerPasswordHash?: string }
+) {
+  return updateCompanyOwnerCredentials(hrmsCompanyId, creds);
 }
 
 // Trades a verified email (the caller has already authenticated this user) for a

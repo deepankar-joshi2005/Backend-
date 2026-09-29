@@ -170,6 +170,7 @@ export const createCaFirm = catchAsync(async (req, res) => {
     type: "system",
     scope: "firm",
     caFirmId: firm._id,
+    link: "",
     createdBy: req.user.id,
   });
 
@@ -211,6 +212,7 @@ export const resetFirmAdminPassword = catchAsync(async (req, res) => {
     scope: "firm",
     caFirmId: req.params.id,
     role: "ca_firm_admin",
+    link: "firm-settings",
     createdBy: req.user.id,
   });
 
@@ -285,6 +287,7 @@ export const updateCaFirm = catchAsync(async (req, res) => {
       type: "warning",
       scope: "firm",
       caFirmId: firm._id,
+      link: "",
       createdBy: req.user.id,
     });
   }

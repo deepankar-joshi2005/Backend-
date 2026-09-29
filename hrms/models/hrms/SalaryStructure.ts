@@ -8,6 +8,10 @@ import mongoose, { Schema, Document } from "mongoose";
 // for their outsourced-payroll business clients.
 export interface ISalaryStructure extends Document {
   employee: mongoose.Types.ObjectId;
+  // Snapshot of the employee's role at save time, used to look up the
+  // role-wise default (companyId + role) for autofilling new employees
+  // of the same role — see getSalaryStructureRoleDefault in the controller.
+  role?: string;
 
   // Earnings
   basic: number;
@@ -55,6 +59,12 @@ const SalaryStructureSchema = new Schema<ISalaryStructure>(
       required: true,
       unique: true,
     },
+    role: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      index: true,
+    },
 
     // Earnings
     basic: { type: Number, default: 0 },
@@ -100,6 +110,8 @@ const SalaryStructureSchema = new Schema<ISalaryStructure>(
   },
   { timestamps: true }
 );
+
+SalaryStructureSchema.index({ companyId: 1, role: 1 });
 
 export const EARNING_FIELDS = [
   "basic",

@@ -22,6 +22,11 @@ const businessClientSchema = new mongoose.Schema(
     industry: { type: String, trim: true },
     contactPerson: { type: String, trim: true },
     email: { type: String, trim: true, lowercase: true },
+    // Business Client's owner — separate from adminEmail (the HR-Admin login
+    // created for HRMS access). Used to send the payroll owner-approval link;
+    // the matching password is only stored (hashed) on the HRMS Company doc,
+    // never here. See businessClientController.ts / internalBridge.ts.
+    ownerEmail: { type: String, trim: true, lowercase: true, default: null },
     phone: { type: String, trim: true },
     address: { type: String, trim: true },
     city: { type: String, trim: true },

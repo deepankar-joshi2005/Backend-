@@ -21,6 +21,8 @@ export async function provisionCompanyForCa({
   caFirmName,
   employeeLimit,
   planTier,
+  ownerEmail,
+  ownerPasswordHash,
 }: {
   companyName: string;
   adminName: string;
@@ -31,6 +33,8 @@ export async function provisionCompanyForCa({
   caFirmName?: string;
   employeeLimit?: number;
   planTier?: string;
+  ownerEmail?: string;
+  ownerPasswordHash?: string;
 }) {
   if (!companyName || !adminName || !adminEmail || !adminPasswordHash || !caFirmId) {
     throw new Error("Required fields missing");
@@ -64,6 +68,8 @@ export async function provisionCompanyForCa({
     subscriptionEndDate: null,
     employeeLimit: employeeLimit || 0,
     planTier: planTier || null,
+    ownerEmail: ownerEmail || null,
+    ownerPasswordHash: ownerPasswordHash || null,
   });
   await company.save();
 
@@ -89,6 +95,20 @@ export async function provisionCompanyForCa({
   await seedDefaultDocumentTypesForCompany(company._id);
 
   return { hrmsCompanyId: company._id, hrmsCompanyCode: company.companyId };
+}
+
+// Lets CA Firm Admin set/change a Business Client's payroll-approval owner
+// credentials after initial onboarding, from the "Edit Business Client" flow.
+export async function updateCompanyOwnerCredentials(
+  hrmsCompanyId: string,
+  { ownerEmail, ownerPasswordHash }: { ownerEmail?: string; ownerPasswordHash?: string }
+) {
+  if (!hrmsCompanyId) throw new Error("hrmsCompanyId is required");
+  const update: Record<string, string> = {};
+  if (ownerEmail !== undefined) update.ownerEmail = ownerEmail;
+  if (ownerPasswordHash !== undefined) update.ownerPasswordHash = ownerPasswordHash;
+  if (!Object.keys(update).length) return;
+  await Company.findByIdAndUpdate(hrmsCompanyId, update);
 }
 
 export async function issueSsoTokenFor(email: string) {

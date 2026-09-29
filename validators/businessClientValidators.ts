@@ -59,6 +59,10 @@ export const createBusinessClientSchema = z.object({
     // Set when provisioning HRMS for an already-converted CRM lead, instead of
     // a from-scratch business client — see createBusinessClient.
     leadId: z.string().trim().optional().or(z.literal("")),
+    // Business Client owner — separate from adminEmail/adminPassword. Used to
+    // email a password-protected payroll owner-approval link.
+    ownerEmail: z.string().trim().toLowerCase().email("Invalid owner email").optional().or(z.literal("")),
+    ownerPassword: z.string().min(8, "Password must be at least 8 characters").optional().or(z.literal("")),
   }),
 });
 
@@ -67,6 +71,8 @@ export const updateBusinessClientSchema = z.object({
     ...clientFields,
     name: clientFields.name.optional(),
     isActive: z.boolean().optional(),
+    ownerEmail: z.string().trim().toLowerCase().email("Invalid owner email").optional().or(z.literal("")),
+    ownerPassword: z.string().min(8, "Password must be at least 8 characters").optional().or(z.literal("")),
   }),
 });
 
@@ -82,6 +88,8 @@ export const upgradeToHrmsSchema = z.object({
     adminEmail: z.string().trim().toLowerCase().email("Invalid admin email").optional().or(z.literal("")),
     adminPassword: z.string().min(8, "Password must be at least 8 characters").optional().or(z.literal("")),
     planTierId: z.string().trim().min(1, "Select an HRMS plan"),
+    ownerEmail: z.string().trim().toLowerCase().email("Invalid owner email").optional().or(z.literal("")),
+    ownerPassword: z.string().min(8, "Password must be at least 8 characters").optional().or(z.literal("")),
   }),
 });
 

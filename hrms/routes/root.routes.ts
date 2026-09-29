@@ -34,6 +34,7 @@ import SelfApprisalsRouter from "./hrms/selfApprasals.routes";
 import FeedbackRouter from "./hrms/feedbackAndRatings.routes";
 import OnboardTaskRouter from "./hrms/onboardingTask.routes";
 import PayrollRouter from "./hrms/payroll.routes";
+import payrollApprovalRoutes from "./payrollApproval.routes";
 import SoftwearManagementRouter from "./hrms/softwearManagementRoutes";
 import AssestRouter from "./hrms/asset.routes";
 import ResingRequestRouter from "./hrms/resignRequest.routes";
@@ -72,6 +73,11 @@ rootRouter.get("/", (req: Request, res: Response) => {
 rootRouter.use("/auth", authRouter);
 rootRouter.use("/setup", setupRouter);
 rootRouter.use("/saas", saasRouter);
+
+// Payroll owner-approval — unauthenticated by design (reached from an emailed
+// link, not a logged-in HRMS session), scoped entirely by the :token in the
+// URL (PayrollRun.approvalToken). See payrollApprovalController.ts.
+rootRouter.use("/public/payroll-approval", payrollApprovalRoutes);
 
 // Users
 rootRouter.use("/users", authMiddleware, subscriptionMiddleware, userRouter);

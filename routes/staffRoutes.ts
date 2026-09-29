@@ -1,5 +1,5 @@
 import express from "express";
-import { listStaff, createStaff, updateStaff, resetStaffPassword } from "../controllers/staffController";
+import { listStaff, createStaff, updateStaff, resetStaffPassword, deleteStaff } from "../controllers/staffController";
 import { protect } from "../middleware/auth";
 import { authorize } from "../middleware/roleCheck";
 import { validate } from "../middleware/validateRequest";
@@ -14,5 +14,6 @@ router.get("/", listStaff);
 router.post("/", requireActiveFirm, validate(createStaffSchema), createStaff);
 router.put("/:id", requireActiveFirm, validate(updateStaffSchema), updateStaff);
 router.put("/:id/reset-password", requireActiveFirm, validate(resetStaffPasswordSchema), resetStaffPassword);
+router.delete("/:id", requireActiveFirm, deleteStaff);
 
 export default router;

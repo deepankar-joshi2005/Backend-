@@ -8,6 +8,23 @@ const phoneSchema = z
   .optional()
   .or(z.literal(""));
 
+const modulePermissionSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    add: z.boolean().optional(),
+    edit: z.boolean().optional(),
+    delete: z.boolean().optional(),
+  })
+  .optional();
+
+const permissionsSchema = z
+  .object({
+    crm: modulePermissionSchema,
+    compliance: modulePermissionSchema,
+    financeTracker: modulePermissionSchema,
+  })
+  .optional();
+
 export const createStaffSchema = z.object({
   body: z.object({
     name: z.string().trim().min(2, "Name is too short"),
@@ -21,6 +38,7 @@ export const createStaffSchema = z.object({
       .optional()
       .or(z.literal("")),
     password: z.string().min(8, "Password must be at least 8 characters").optional().or(z.literal("")),
+    permissions: permissionsSchema,
   }),
 });
 
@@ -37,6 +55,7 @@ export const updateStaffSchema = z.object({
       .optional()
       .or(z.literal("")),
     isActive: z.boolean().optional(),
+    permissions: permissionsSchema,
   }),
 });
 

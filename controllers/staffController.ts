@@ -45,7 +45,7 @@ export const listStaff = catchAsync(async (req, res) => {
 // Per Multi-Tenancy doc Section 5: "Staff Seats" caps every Tier-2 login on the firm
 // (admin + staff), not staff alone.
 export const createStaff = catchAsync(async (req, res) => {
-  const { name, email, phone, designation, icaiMembershipNo, password } = req.body;
+  const { name, email, phone, designation, icaiMembershipNo, password, permissions } = req.body;
 
   const existing = await User.findOne({ email });
   if (existing) throw new ApiError(409, "An account with this email already exists");
@@ -75,6 +75,7 @@ export const createStaff = catchAsync(async (req, res) => {
     designation: designation || undefined,
     icaiMembershipNo: icaiMembershipNo || undefined,
     mustChangePassword: !usingOwnPassword,
+    permissions: permissions || undefined,
     createdBy: req.user.id,
   });
 
@@ -110,7 +111,7 @@ export const createStaff = catchAsync(async (req, res) => {
 });
 
 export const updateStaff = catchAsync(async (req, res) => {
-  const { name, email, phone, designation, icaiMembershipNo, isActive } = req.body;
+  const { name, email, phone, designation, icaiMembershipNo, isActive, permissions } = req.body;
   const staff = await User.findOne({ _id: req.params.id, caFirmId: req.user.caFirmId, role: "ca_firm_staff" });
   if (!staff) throw new ApiError(404, "Staff member not found");
 
@@ -122,6 +123,11 @@ export const updateStaff = catchAsync(async (req, res) => {
   if (isActive !== undefined) {
     staff.isActive = isActive;
     if (!isActive) staff.tokenVersion += 1;
+  }
+  if (permissions !== undefined) {
+    for (const moduleName of Object.keys(permissions)) {
+      staff.permissions[moduleName] = { ...staff.permissions[moduleName], ...permissions[moduleName] };
+    }
   }
   await staff.save();
 
@@ -159,4 +165,22 @@ export const resetStaffPassword = catchAsync(async (req, res) => {
     data: { tempPassword },
     message: usingOwnPassword ? "Password updated." : "Password reset. Share the temporary password securely.",
   });
+});
+
+export const deleteStaff = catchAsync(async (req, res) => {
+  const staff = await User.findOneAndDelete({
+    _id: req.params.id,
+    caFirmId: req.user.caFirmId,
+    role: "ca_firm_staff",
+  });
+  if (!staff) throw new ApiError(404, "Staff member not found");
+
+  await writeAuditLog(req, {
+    action: "staff.deleted",
+    targetType: "User",
+    targetId: staff._id,
+    targetLabel: staff.name,
+  });
+
+  res.json({ success: true, message: "Staff member deleted" });
 });

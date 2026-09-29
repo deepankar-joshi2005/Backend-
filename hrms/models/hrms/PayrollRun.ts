@@ -2,7 +2,7 @@
 
 import mongoose, { Schema, Document } from "mongoose";
 
-export type PayrollRunStatus = "Draft" | "Processing" | "Completed" | "Cancelled";
+export type PayrollRunStatus = "Draft" | "PendingOwnerApproval" | "Processing" | "Completed" | "Cancelled";
 
 export interface IPayrollRun extends Document {
   companyId: mongoose.Types.ObjectId;
@@ -14,6 +14,12 @@ export interface IPayrollRun extends Document {
   payDate?: string; // YYYY-MM-DD
   status: PayrollRunStatus;
   generatedBy: "Company" | "CA";
+  // Owner email-approval gate (only used when Company.ownerEmail/ownerPasswordHash
+  // are configured) — see payrollApprovalController.ts.
+  approvalToken?: string;
+  approvalTokenExpiry?: Date;
+  ownerApprovedAt?: Date;
+  ownerApprovedByEmail?: string;
 }
 
 const PayrollRunSchema = new Schema<IPayrollRun>(
@@ -49,7 +55,7 @@ const PayrollRunSchema = new Schema<IPayrollRun>(
     },
     status: {
       type: String,
-      enum: ["Draft", "Processing", "Completed", "Cancelled"],
+      enum: ["Draft", "PendingOwnerApproval", "Processing", "Completed", "Cancelled"],
       default: "Draft",
     },
     // Who actually triggered "Run Payroll" for this run — the company's own
@@ -59,6 +65,22 @@ const PayrollRunSchema = new Schema<IPayrollRun>(
       type: String,
       enum: ["Company", "CA"],
       default: "Company",
+    },
+    approvalToken: {
+      type: String,
+      default: null,
+    },
+    approvalTokenExpiry: {
+      type: Date,
+      default: null,
+    },
+    ownerApprovedAt: {
+      type: Date,
+      default: null,
+    },
+    ownerApprovedByEmail: {
+      type: String,
+      default: null,
     },
   },
   { timestamps: true }

@@ -79,6 +79,7 @@ export const registerFirm = catchAsync(async (req, res) => {
     message: `${firm.name} signed up for a free trial.`,
     type: "system",
     scope: "super_admin",
+    link: "ca-firms",
   });
 
   const accessToken = await issueSession(res, user);

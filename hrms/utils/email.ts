@@ -444,6 +444,79 @@ export async function sendForgotPasswordEmail({
   });
 }
 
+// Sent to a Business Client's owner (Company.ownerEmail) whenever HR/Admin
+// runs payroll for a month on a company that has owner-approval configured.
+// The link itself carries no financial data — opening it only reveals the
+// company/month; the owner must still enter their payroll-approval password
+// to see figures and approve. See payrollApprovalController.ts.
+export async function sendPayrollApprovalEmail({
+  to,
+  companyName,
+  month,
+  link,
+}: {
+  to: string;
+  companyName: string;
+  month: string; // YYYY-MM
+  link: string;
+}) {
+  const monthLabel = new Date(`${month}-01`).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
+        .content { background-color: white; padding: 20px; border-radius: 5px; }
+        .button {
+          display: inline-block;
+          padding: 12px 24px;
+          background-color: #0066ff;
+          color: #ffffff !important;
+          text-decoration: none;
+          border-radius: 5px;
+          margin-top: 15px;
+          font-weight: bold;
+          font-size: 16px;
+          border: 2px solid #0052cc;
+        }
+        .footer { margin-top: 20px; font-size: 12px; color: #666666; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h2 style="margin: 0; color: #0066ff;">Payroll Approval Needed — ${companyName}</h2>
+        </div>
+        <div class="content">
+          <p>Hi,</p>
+          <p><strong>${companyName}</strong>'s payroll for <strong>${monthLabel}</strong> has been prepared and is waiting for your approval before it is processed.</p>
+          <p>Click the button below, enter your payroll approval password, and review each employee's pay before approving.</p>
+          <a href="${link}" style="color: #ffffff; text-decoration: none;">
+            <div class="button">Review &amp; Approve Payroll</div>
+          </a>
+          <p style="margin-top: 20px; font-size: 13px;">If the button doesn't work, copy and paste this link into your browser:</p>
+          <p style="font-size: 13px; color: #666666; word-break: break-all;">${link}</p>
+          <p style="font-size: 13px; color: #666666;">This link expires in 7 days. Payroll will not be processed until you approve it.</p>
+        </div>
+        <div class="footer">
+          <p>This is an automated message, please do not reply to this email.</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  await transporter.sendMail({
+    from: process.env.FROM_EMAIL,
+    to,
+    subject: `Action required: Approve ${monthLabel} payroll for ${companyName}`,
+    html,
+  });
+}
+
 //Email and Password Email
 export async function sendUserCredentialsEmail({
   to,

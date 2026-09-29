@@ -15,7 +15,7 @@ const PAYSLIP_DETAIL_POPULATE = {
     { path: "designationId", select: "name" },
     { path: "departmentId", select: "name" },
     { path: "branchId", select: "name" },
-    { path: "companyId", select: "name address logo stamp email phone" },
+    { path: "companyId", select: "name address logo stamp email phone caFirmName" },
   ],
   select:
     "name email employeeId joiningDate pan pfNumber uan bankName bankAccountNumber ifscCode elBalance slBalance",

@@ -14,6 +14,29 @@ export const ROLES = [
 // manager, ...) vary too much to enumerate, so the schema field below stays free text.
 export const DESIGNATIONS = ["proprietor", "partner", "director", "authorized_signatory"];
 
+// Modules a ca_firm_admin can grant/restrict for their ca_firm_staff. Each module can be
+// hidden entirely (enabled: false -> not in sidebar, all API access blocked) or shown with
+// a granular add/edit/delete grant. Defaults below mirror the access staff already had
+// before per-staff permissions existed, so existing staff accounts see no behavior change
+// until a firm admin explicitly edits their permissions.
+export const STAFF_MODULES = ["crm", "compliance", "financeTracker"];
+
+const STAFF_MODULE_DEFAULTS = {
+  crm: { enabled: true, add: true, edit: true, delete: false },
+  compliance: { enabled: true, add: true, edit: false, delete: false },
+  financeTracker: { enabled: true, add: true, edit: true, delete: true },
+};
+
+function modulePermissionSchema(defaults) {
+  return {
+    enabled: { type: Boolean, default: defaults.enabled },
+    add: { type: Boolean, default: defaults.add },
+    edit: { type: Boolean, default: defaults.edit },
+    delete: { type: Boolean, default: defaults.delete },
+    _id: false,
+  };
+}
+
 const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
@@ -61,6 +84,12 @@ const userSchema = new mongoose.Schema(
     icaiMembershipNo: { type: String, trim: true },
     avatarUrl: { type: String },
     isActive: { type: Boolean, default: true },
+    // Only meaningful for ca_firm_staff; other roles ignore this.
+    permissions: {
+      crm: modulePermissionSchema(STAFF_MODULE_DEFAULTS.crm),
+      compliance: modulePermissionSchema(STAFF_MODULE_DEFAULTS.compliance),
+      financeTracker: modulePermissionSchema(STAFF_MODULE_DEFAULTS.financeTracker),
+    },
     mustChangePassword: { type: Boolean, default: false },
     tokenVersion: { type: Number, default: 0 },
     lastLoginAt: { type: Date },

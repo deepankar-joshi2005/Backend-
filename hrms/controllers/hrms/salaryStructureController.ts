@@ -47,6 +47,7 @@ export const addSalaryStructure = async (req: AuthRequest, res: Response) => {
       employee,
       ...components,
       companyId: companyId, // Set companyId
+      role: targetUser.role, // Snapshot role for role-wise default autofill
     });
 
     res.status(201).json({
@@ -57,6 +58,50 @@ export const addSalaryStructure = async (req: AuthRequest, res: Response) => {
     console.error("Add salary error:", error);
     res.status(500).json({
       message: "Failed to add salary structure",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * 🧬 Get role-wise default salary structure (companyId + role)
+ * Used by the Add Salary Structure form to autofill earnings/deductions
+ * from the most recently saved structure for the same role in the same
+ * company, when adding a structure for a new employee of that role.
+ */
+export const getSalaryStructureRoleDefault = async (req: AuthRequest, res: Response) => {
+  try {
+    const { role } = req.params;
+    if (!role) {
+      return res.status(400).json({ message: "Role is required" });
+    }
+
+    const { companyId: qCompanyId } = req.query;
+    const { companyId: uCompanyId, role: userRole } = req.user;
+
+    const companyId = userRole !== ROLES.HRMSAdmin ? uCompanyId : qCompanyId;
+    if (!companyId) {
+      return res.status(400).json({ message: "companyId is required" });
+    }
+
+    const defaultStructure = await SalaryStructure.findOne({
+      companyId,
+      role: String(role).toLowerCase().trim(),
+    }).sort({ updatedAt: -1 });
+
+    if (!defaultStructure) {
+      return res.json(null);
+    }
+
+    const components: Record<string, number> = {};
+    for (const field of COMPONENT_FIELDS) {
+      components[field] = (defaultStructure as any)[field] ?? 0;
+    }
+
+    res.json({ components });
+  } catch (error: any) {
+    res.status(500).json({
+      message: "Failed to fetch role default salary structure",
       error: error.message,
     });
   }

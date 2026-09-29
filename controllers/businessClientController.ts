@@ -19,7 +19,12 @@ import { writeAuditLog } from "../utils/writeAuditLog";
 import { getSystemSettings } from "../utils/getSystemSettings";
 import { sendMail } from "../utils/sendMail";
 import { credentialsWelcomeEmail } from "../utils/emailTemplates";
-import { provisionHrmsCompany, getHrmsSsoToken, getCaProxyHrmsSsoToken } from "../utils/provisionHrms";
+import {
+  provisionHrmsCompany,
+  getHrmsSsoToken,
+  getCaProxyHrmsSsoToken,
+  updateHrmsCompanyOwnerCredentials,
+} from "../utils/provisionHrms";
 import HrmsCompany from "../hrms/models/hrms/Company";
 import { generateNextEmployeeCode, toNameKey } from "../utils/employeeIdGenerator";
 
@@ -40,7 +45,17 @@ async function provisionHrmsForClient(
     adminPassword,
     planTierId,
     planTier: prefetchedPlanTier,
-  }: { adminName: string; adminEmail: string; adminPassword?: string; planTierId?: string; planTier?: any },
+    ownerEmail,
+    ownerPassword,
+  }: {
+    adminName: string;
+    adminEmail: string;
+    adminPassword?: string;
+    planTierId?: string;
+    planTier?: any;
+    ownerEmail?: string;
+    ownerPassword?: string;
+  },
   req
 ) {
   if (!adminEmail) throw new ApiError(400, "An email is required to create the HRMS login");
@@ -90,6 +105,12 @@ async function provisionHrmsForClient(
     });
   }
 
+  // Payroll owner-approval credentials — separate from the admin login above.
+  // Optional: the owner-approval email gate only activates for this company
+  // once both are set (see runPayrollRunForMonth).
+  const ownerPasswordHash = ownerPassword ? await bcrypt.hash(ownerPassword, SALT_ROUNDS) : undefined;
+  if (ownerEmail !== undefined) client.ownerEmail = ownerEmail;
+
   try {
     const provisioned = await provisionHrmsCompany({
       companyName: client.name,
@@ -101,6 +122,8 @@ async function provisionHrmsForClient(
       caFirmName: firm.name,
       employeeLimit: planTier?.maxEmployees ?? 0,
       planTier: planTier?.name,
+      ownerEmail,
+      ownerPasswordHash,
     });
     if (provisioned) {
       client.hrmsCompanyId = provisioned.hrmsCompanyId;
@@ -277,7 +300,7 @@ export const createBusinessClient = catchAsync(async (req, res) => {
     pincode,
     services,
   } = req.body;
-  const { adminName, adminEmail, adminPassword, planTierId } = req.body;
+  const { adminName, adminEmail, adminPassword, planTierId, ownerEmail, ownerPassword } = req.body;
 
   // "Use HRMS" defaults on (matches the always-on behaviour before this was a
   // checkbox); the admin login is auto-derived from the Primary Contact
@@ -385,7 +408,15 @@ export const createBusinessClient = catchAsync(async (req, res) => {
       ? await provisionHrmsForClient(
           client,
           firm,
-          { adminName: resolvedAdminName, adminEmail: resolvedAdminEmail, adminPassword, planTierId, planTier },
+          {
+            adminName: resolvedAdminName,
+            adminEmail: resolvedAdminEmail,
+            adminPassword,
+            planTierId,
+            planTier,
+            ownerEmail,
+            ownerPassword,
+          },
           req
         )
       : await createClientAdminLogin(client, firm, { adminName: resolvedAdminName, adminEmail: resolvedAdminEmail, adminPassword }, req);
@@ -524,14 +555,14 @@ export const upgradeToHrms = catchAsync(async (req, res) => {
   if (client.useHrms) throw new ApiError(400, "This client already uses HRMS");
 
   const firm = await CaFirm.findById(req.user.caFirmId);
-  const { adminName, adminEmail, adminPassword, planTierId } = req.body;
+  const { adminName, adminEmail, adminPassword, planTierId, ownerEmail, ownerPassword } = req.body;
   const resolvedAdminName = adminName || client.contactPerson || client.name;
   const resolvedAdminEmail = adminEmail || client.email;
 
   const { admin, tempPassword } = await provisionHrmsForClient(
     client,
     firm,
-    { adminName: resolvedAdminName, adminEmail: resolvedAdminEmail, adminPassword, planTierId },
+    { adminName: resolvedAdminName, adminEmail: resolvedAdminEmail, adminPassword, planTierId, ownerEmail, ownerPassword },
     req
   );
 
@@ -605,6 +636,8 @@ export const updateMyBusinessClient = catchAsync(async (req, res) => {
     state,
     pincode,
     services,
+    ownerEmail,
+    ownerPassword,
   } = req.body;
   const client = await BusinessClient.findOne({ _id: req.params.id, caFirmId: req.user.caFirmId });
   if (!client) throw new ApiError(404, "Business client not found");
@@ -624,7 +657,16 @@ export const updateMyBusinessClient = catchAsync(async (req, res) => {
   if (state !== undefined) client.state = state;
   if (pincode !== undefined) client.pincode = pincode;
   if (services !== undefined) client.services = services;
+  if (ownerEmail !== undefined) client.ownerEmail = ownerEmail;
   await client.save();
+
+  // Payroll owner-approval credentials live on the HRMS Company doc (single
+  // source of truth for the password hash — see BusinessClient.ownerEmail
+  // comment). Only push an update if this client actually has HRMS provisioned.
+  if (client.hrmsCompanyId && (ownerEmail !== undefined || ownerPassword)) {
+    const ownerPasswordHash = ownerPassword ? await bcrypt.hash(ownerPassword, SALT_ROUNDS) : undefined;
+    await updateHrmsCompanyOwnerCredentials(client.hrmsCompanyId, { ownerEmail, ownerPasswordHash });
+  }
 
   await writeAuditLog(req, {
     action:

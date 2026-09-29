@@ -17,6 +17,12 @@ export interface ICompany extends Document {
   // directly, so this is always set.
   caFirmId?: string;
   caFirmName?: string;
+  // Business Client owner — distinct from the company's admin/HR-Admin HRMS
+  // login. Used to email a password-protected payroll-approval link; set
+  // optionally at "Add Business Client" onboarding (or later edit) on the
+  // CA-Management side. See payrollApprovalController.ts.
+  ownerEmail?: string;
+  ownerPasswordHash?: string;
   logo?: string;
   stamp?: string;
   gstNo?: string;
@@ -94,6 +100,18 @@ const companySchema = new Schema<ICompany>(
     caFirmName: {
       type: String,
       default: null,
+    },
+
+    ownerEmail: {
+      type: String,
+      default: null,
+      lowercase: true,
+      trim: true,
+    },
+    ownerPasswordHash: {
+      type: String,
+      default: null,
+      select: false,
     },
 
     logo: {

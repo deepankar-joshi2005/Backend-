@@ -8,5 +8,6 @@ export const sendNotificationSchema = z.object({
     scope: z.enum(["all_firms", "firm"]),
     caFirmId: z.string().trim().optional(),
     role: z.string().trim().optional(),
+    link: z.string().trim().optional(),
   }),
 });

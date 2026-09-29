@@ -38,6 +38,11 @@ export const listLeads = catchAsync(async (req, res) => {
   if (req.query.status) filter.status = req.query.status;
   else if (req.query.excludeConverted === "true") filter.status = { $ne: "converted" };
   if (req.query.assignedTo && req.user.role === "ca_firm_admin") filter.assignedTo = req.query.assignedTo;
+  if (req.query.dateFrom || req.query.dateTo) {
+    filter.createdAt = {};
+    if (req.query.dateFrom) filter.createdAt.$gte = new Date(`${req.query.dateFrom}T00:00:00.000`);
+    if (req.query.dateTo) filter.createdAt.$lte = new Date(`${req.query.dateTo}T23:59:59.999`);
+  }
   if (req.query.search) {
     filter.$or = [
       { name: { $regex: req.query.search, $options: "i" } },

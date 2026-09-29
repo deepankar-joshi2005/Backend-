@@ -33,6 +33,7 @@ export const createTicket = catchAsync(async (req, res) => {
     message: `${req.currentUser.name} raised: "${subject}"`,
     type: "ticket",
     scope: "super_admin",
+    link: "support",
   });
 
   res.status(201).json({ success: true, data: ticket, message: "Ticket submitted" });
@@ -88,6 +89,7 @@ export const replyToTicket = catchAsync(async (req, res) => {
     scope: req.user.role === "super_admin" ? "firm" : "super_admin",
     caFirmId: req.user.role === "super_admin" ? ticket.caFirmId : null,
     role: req.user.role === "super_admin" ? "ca_firm_admin" : null,
+    link: "support",
     createdBy: req.user.id,
   });
 

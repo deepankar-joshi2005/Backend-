@@ -30,27 +30,32 @@ const generatePayslipPDF = async (payslip: any) => {
   doc.pipe(writeStream);
 
   const user = payslip.user || {};
-  const company = user.companyId || { name: "Company", address: "", email: "", phone: "" };
+  const company = user.companyId || { name: "Company", address: "", email: "", phone: "", caFirmName: "" };
   const b = buildPayslipBreakdown(payslip);
 
   const left = 40;
   const right = 555;
 
   /* ===== HEADER ===== */
-  doc.fillColor(GREEN_DARK).font("Helvetica-Bold").fontSize(18).text(company.name?.toUpperCase() || "COMPANY", left, 40);
+  // CA firm letterhead line — the accounting firm that manages this business
+  // client's payroll, shown above the client company's own name.
+  if (company.caFirmName) {
+    doc.fillColor(GRAY).font("Helvetica-Bold").fontSize(8.5).text(company.caFirmName.toUpperCase(), left, 40);
+  }
+  doc.fillColor(GREEN_DARK).font("Helvetica-Bold").fontSize(18).text(company.name?.toUpperCase() || "COMPANY", left, 54);
   doc.fillColor(GRAY).font("Helvetica").fontSize(9);
-  if (company.address) doc.text(company.address, left, 62, { width: 400 });
+  if (company.address) doc.text(company.address, left, 76, { width: 400 });
   const contactLine = [company.email, company.phone].filter(Boolean).join("  |  ");
-  if (contactLine) doc.text(contactLine, left, 76, { width: 400 });
+  if (contactLine) doc.text(contactLine, left, 90, { width: 400 });
 
-  doc.moveTo(left, 96).lineTo(right, 96).lineWidth(2).strokeColor(GREEN).stroke();
+  doc.moveTo(left, 110).lineTo(right, 110).lineWidth(2).strokeColor(GREEN).stroke();
 
-  doc.fillColor(DARK).font("Helvetica-Bold").fontSize(13).text(`Payslip for the month of ${monthLabel(payslip.month)}`, left, 108);
+  doc.fillColor(DARK).font("Helvetica-Bold").fontSize(13).text(`Payslip for the month of ${monthLabel(payslip.month)}`, left, 122);
 
-  doc.moveTo(left, 130).lineTo(right, 130).lineWidth(1).strokeColor(LINE).stroke();
+  doc.moveTo(left, 144).lineTo(right, 144).lineWidth(1).strokeColor(LINE).stroke();
 
   /* ===== EMPLOYEE PAY SUMMARY ===== */
-  const summaryTop = 144;
+  const summaryTop = 158;
   doc.fillColor(GREEN).font("Helvetica-Bold").fontSize(11).text("Employee Pay Summary", left, summaryTop);
 
   const [py, pm] = payslip.month.split("-").map(Number);

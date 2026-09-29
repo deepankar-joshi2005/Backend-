@@ -14,6 +14,7 @@ export function sanitizeUser(user) {
     icaiMembershipNo: user.icaiMembershipNo,
     avatarUrl: user.avatarUrl,
     isActive: user.isActive,
+    permissions: user.permissions,
     mustChangePassword: user.mustChangePassword,
     lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt,

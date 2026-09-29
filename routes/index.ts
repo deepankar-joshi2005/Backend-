@@ -15,6 +15,7 @@ import crmRoutes from "./crmRoutes";
 import complianceRoutes from "./complianceRoutes";
 import hrmsPlanTierRoutes from "./hrmsPlanTierRoutes";
 import financeTrackerRoutes from "./financeTrackerRoutes";
+import reportsRoutes from "./reportsRoutes";
 
 const router = express.Router();
 
@@ -38,5 +39,6 @@ router.use("/crm", crmRoutes);
 router.use("/compliance", complianceRoutes);
 router.use("/hrms-plan-tiers", hrmsPlanTierRoutes);
 router.use("/finance-tracker", financeTrackerRoutes);
+router.use("/reports", reportsRoutes);
 
 export default router;

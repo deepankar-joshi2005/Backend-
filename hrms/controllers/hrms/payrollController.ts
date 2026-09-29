@@ -17,6 +17,10 @@ import AttendancePolicy from "../../models/hrms/AttendancePolicy";
 import { toWorkingDayLike, toPolicyLike } from "../../utils/attendanceStatus";
 import { computeMonthlyPayrollForEmployee, PayrollBreakdown } from "../../utils/payrollCalculator";
 import { monthBounds, defaultRunTitle } from "../../utils/payrollRunHelpers";
+// Only referenced inside savePayroll's function body (never at module load),
+// so this is safe despite payrollRunController.ts importing back from this
+// file — both modules are fully loaded by the time any request comes in.
+import { runPayrollRunForMonthCore } from "./payrollRunController";
 
 /* =====================================================
    🧮 SHARED: build server-authoritative payroll breakdowns for a month
@@ -163,9 +167,21 @@ export const getPayrollByMonth = async (req: AuthRequest, res: Response) => {
 
 /* ================= SHARED: compute + persist payroll for a month =================
    Used by both the legacy /payroll/run endpoint and the new
-   /payroll/runs/:month/run endpoint, so the two can never disagree. */
-export async function runPayrollForMonth(req: AuthRequest, month: string): Promise<number> {
-  const results = await buildPayrollBreakdownsForMonth(req, month);
+   /payroll/runs/:month/run endpoint, so the two can never disagree.
+   `restrictToCompanyIds`, when given, only persists results for those
+   companies — used by runPayrollRunForMonthCore so companies still waiting
+   on owner approval don't get their Payroll rows written early. */
+export async function runPayrollForMonth(
+  req: AuthRequest,
+  month: string,
+  restrictToCompanyIds?: string[]
+): Promise<number> {
+  let results = await buildPayrollBreakdownsForMonth(req, month);
+
+  if (restrictToCompanyIds?.length) {
+    const allowed = new Set(restrictToCompanyIds.map(String));
+    results = results.filter((r) => allowed.has(String(r.companyId)));
+  }
 
   if (!results.length) {
     throw new Error("No employees with a salary structure found for this month");
@@ -214,7 +230,10 @@ export async function runPayrollForMonth(req: AuthRequest, month: string): Promi
 /* ================= SAVE / UPDATE PAYROLL (RUN PAYROLL) =================
    Server-authoritative: recomputes every employee's payroll from
    attendance + policy + salary structure. The client can no longer post
-   trusted final numbers — it only tells us which month to run. */
+   trusted final numbers — it only tells us which month to run.
+   Legacy endpoint, kept for backward compatibility — delegates to the same
+   owner-approval-aware core as /payroll/runs/:month/run so this can't be
+   used to bypass a company's owner-approval gate. */
 export const savePayroll = async (req: AuthRequest, res: Response) => {
   try {
     const { month } = req.body;
@@ -223,9 +242,8 @@ export const savePayroll = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ message: "Month required" });
     }
 
-    await runPayrollForMonth(req, month);
-
-    res.json({ message: "Payroll processed successfully" });
+    const result = await runPayrollRunForMonthCore(req, month);
+    res.json(result);
   } catch (error: any) {
     console.error(error);
     if (error.message === "No employees with a salary structure found for this month") {
@@ -247,6 +265,14 @@ export const updatePayrollStatus = async (req: AuthRequest, res: Response) => {
     // Access check
     if (!req.user.isSystemAdmin && req.user.role !== ROLES.HRMSAdmin && existingPayroll.companyId?.toString() !== req.user.companyId?.toString()) {
       return res.status(403).json({ message: "Access denied." });
+    }
+
+    // Defense-in-depth: a "Processed" Payroll row shouldn't structurally exist
+    // before the business owner approves (see runPayrollRunForMonthCore), but
+    // guard the transition explicitly too in case another path ever creates one.
+    const run = await PayrollRun.findOne({ companyId: existingPayroll.companyId, month: existingPayroll.month });
+    if (run?.status === "PendingOwnerApproval") {
+      return res.status(403).json({ message: "This payroll is still waiting for the business owner's approval." });
     }
 
     const payroll = await Payroll.findByIdAndUpdate(
@@ -278,6 +304,14 @@ export const payAllPayroll = async (req: AuthRequest, res: Response) => {
     const filter: any = { month, status: "Processed" };
     if (!req.user.isSystemAdmin && req.user.role !== ROLES.HRMSAdmin) {
       filter.companyId = req.user.companyId;
+    }
+
+    // Defense-in-depth: exclude any company still waiting on owner approval
+    // for this month (see updatePayrollStatus for why this shouldn't be
+    // reachable structurally, but guard it explicitly here too).
+    const pendingApprovalRuns = await PayrollRun.find({ month, status: "PendingOwnerApproval" }).select("companyId").lean();
+    if (pendingApprovalRuns.length) {
+      filter.companyId = { ...(filter.companyId ? { $eq: filter.companyId } : {}), $nin: pendingApprovalRuns.map((r) => r.companyId) };
     }
 
     const result = await Payroll.updateMany(filter, { $set: { status: "Paid" } });

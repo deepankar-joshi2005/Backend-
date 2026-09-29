@@ -18,6 +18,10 @@ const notificationSchema = new mongoose.Schema(
       caFirmId: { type: mongoose.Schema.Types.ObjectId, ref: "CaFirm", default: null },
       role: { type: String, default: null },
     },
+    // Path relative to the viewing user's role-base (e.g. "support", "ca-firms"),
+    // resolved on the frontend as `${basePath}/${link}` when the notification is clicked.
+    // null/"" means "just go to the dashboard".
+    link: { type: String, default: null, trim: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "CaUser", default: null },
     readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "CaUser" }],
   },

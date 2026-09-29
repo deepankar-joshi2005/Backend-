@@ -50,6 +50,10 @@ async function computeExpiryAlerts(user) {
     type: "expiry",
     isRead: false,
     createdAt: firm.plan.expiryDate,
+    // Super admin reviews the firm from the firms list; a firm's own users don't all
+    // have access to the subscription page (staff can't), so send everyone to the
+    // dashboard, which already surfaces the renewal prompt near expiry.
+    link: user.role === "super_admin" ? "ca-firms" : "",
   }));
 }
 
@@ -67,6 +71,7 @@ export const listMyNotifications = catchAsync(async (req, res) => {
     type: n.type,
     isRead: n.readBy.some((id) => id.toString() === req.user.id),
     createdAt: n.createdAt,
+    link: n.link || null,
   }));
 
   const combined = [...alerts, ...notifications].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -98,7 +103,7 @@ export const markAllNotificationsRead = catchAsync(async (req, res) => {
 // Super Admin "Send Notification" — announcements / maintenance notices,
 // targeted platform-wide, at one firm, or narrowed further by role.
 export const sendNotification = catchAsync(async (req, res) => {
-  const { title, message, type, scope, caFirmId, role } = req.body;
+  const { title, message, type, scope, caFirmId, role, link } = req.body;
 
   if (scope === "firm" && !caFirmId) {
     throw new ApiError(400, "caFirmId is required when scope is 'firm'");
@@ -109,6 +114,7 @@ export const sendNotification = catchAsync(async (req, res) => {
     message,
     type: type || "info",
     audience: { scope, caFirmId: scope === "firm" ? caFirmId : null, role: role || null },
+    link: link || null,
     createdBy: req.user.id,
   });
 
