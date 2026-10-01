@@ -6,7 +6,8 @@ import LeaveType from "../../models/hrms/LeaveType";
 import LeaveBalanceAdjustment from "../../models/hrms/LeaveBalanceAdjustment";
 import { AuthRequest } from "../../middleware/auth";
 import User from "../../models/User";
-import { sendCommonEmail, CommonEmailType } from "../../utils/email";
+import { CommonEmailType } from "../../utils/email";
+import { notifyHrmsUserInBackground, findApprovers, formatHrmsDate } from "../../utils/hrmsNotify";
 import mongoose from "mongoose";
 import { ROLES } from "../../constants";
 
@@ -96,6 +97,39 @@ export const applyLeave = async (req: AuthRequest, res: Response) => {
       status: "PENDING",
       companyId: (!req.user.isSystemAdmin && req.user.role !== ROLES.HRMSAdmin) ? req.user.companyId : req.body.companyId, // Set companyId correctly for admins
     });
+
+    // Module Scope doc, Section 2 — "Leave application & approval workflow:
+    // Employee applies, Business Client Admin approves/rejects": tell the
+    // approver(s) a new request is waiting (new record → automatic notification,
+    // Section 6.1).
+    findApprovers(req.user)
+      .then((approvers) => {
+        for (const approver of approvers) {
+          if (String(approver._id) === String(req.user._id)) continue;
+          const link = approver.role === ROLES.Manager ? "/hrms/manager/approvals/leaves" : "/hrms/SuperAdmin/leaves";
+          const range = `${formatHrmsDate(fromDate)} – ${formatHrmsDate(toDate)}`;
+          notifyHrmsUserInBackground({
+            user: approver,
+            event: "hrms_leave_applied",
+            title: "New leave request",
+            message: `${req.user.name} applied for ${totalDays} day(s) of ${leaveType} leave (${range}).`,
+            link,
+            email: {
+              heading: "New leave request",
+              lines: [
+                `${req.user.name} has applied for ${totalDays} day(s) of ${leaveType} leave (${range}).`,
+                `Reason: ${reason}`,
+                "Please review it in HRMS.",
+              ],
+            },
+            whatsapp: {
+              params: { employeeName: req.user.name, fromDate: formatHrmsDate(fromDate), toDate: formatHrmsDate(toDate) },
+              fallbackText: `${req.user.name} has applied for ${leaveType} leave from ${formatHrmsDate(fromDate)} to ${formatHrmsDate(toDate)}. Please review it in HRMS.`,
+            },
+          });
+        }
+      })
+      .catch((err) => console.error("Leave-applied notification failed:", err.message));
 
     res.status(201).json(leave);
   } catch (error) {
@@ -314,18 +348,24 @@ export const updateLeaveStatus = async (req: AuthRequest, res: Response) => {
 
     const employee = leave.employee as any;
 
-    // 📧 SEND EMAIL
-    await sendCommonEmail({
-      type:
-        status === "APPROVED"
-          ? CommonEmailType.LEAVE_APPROVED
-          : CommonEmailType.LEAVE_REJECTED,
-      to: employee.email,
-      name: employee.name,
-      data: {
-        from: leave.fromDate,
-        to: leave.toDate,
-        remark,
+    // Module Scope doc, Section 6.1 — "HRMS leave status alerts to employee via
+    // WhatsApp/email — auto-sent when Business Client Admin approves/rejects
+    // leave" (plus the in-app bell). Background: never blocks/fails the approval.
+    const statusLabel = status === "APPROVED" ? "Approved" : "Rejected";
+    notifyHrmsUserInBackground({
+      userId: employee._id,
+      event: "hrms_leave_status",
+      title: `Leave ${statusLabel.toLowerCase()}`,
+      message: `Your ${leave.leaveType} leave (${formatHrmsDate(leave.fromDate)} – ${formatHrmsDate(leave.toDate)}) has been ${statusLabel.toLowerCase()}.${remark ? ` Remark: ${remark}` : ""}`,
+      type: status === "APPROVED" ? "success" : "warning",
+      link: "/hrms/employee/leave/apply",
+      email: {
+        template: status === "APPROVED" ? CommonEmailType.LEAVE_APPROVED : CommonEmailType.LEAVE_REJECTED,
+        data: { from: leave.fromDate, to: leave.toDate, remark },
+      },
+      whatsapp: {
+        params: { status: statusLabel, fromDate: formatHrmsDate(leave.fromDate), toDate: formatHrmsDate(leave.toDate) },
+        fallbackText: `Your leave from ${formatHrmsDate(leave.fromDate)} to ${formatHrmsDate(leave.toDate)} has been ${statusLabel.toLowerCase()}.${remark ? ` Remark: ${remark}` : ""}`,
       },
     });
 

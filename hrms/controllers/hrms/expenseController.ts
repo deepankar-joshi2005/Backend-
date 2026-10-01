@@ -3,6 +3,7 @@ import { Response } from "express";
 import Expense from "../../models/hrms/Expense";
 import User from "../../models/User";
 import { AuthRequest } from "../../middleware/auth";
+import { notifyRequestStatus } from "../../utils/hrmsNotify";
 
 /* ================= EMPLOYEE: CREATE EXPENSE ================= */
 export const createExpense = async (req: AuthRequest, res: Response) => {
@@ -93,8 +94,13 @@ export const updateExpenseStatus = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: "Expense not found" });
     }
 
+    const previousStatus = expense.status;
     expense.status = status;
     await expense.save();
+
+    if (previousStatus !== status) {
+      notifyRequestStatus({ employeeId: expense.employee, requestType: "Expense", status, link: "/hrms/employee/expenses/submit" });
+    }
 
     res.json(expense);
   } catch (error) {

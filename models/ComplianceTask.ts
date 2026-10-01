@@ -45,6 +45,9 @@ const complianceTaskSchema = new mongoose.Schema(
     notes: [noteSchema],
     caFirmId: { type: mongoose.Schema.Types.ObjectId, ref: "CaFirm", required: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "CaUser", default: null },
+    // Deadline reminders already sent, as "<YYYY-MM-DD due date>:<days before>"
+    // keys (jobs/notificationJobs.ts) — moving the due date naturally re-arms them.
+    remindersSent: { type: [String], default: [] },
   },
   { timestamps: true }
 );

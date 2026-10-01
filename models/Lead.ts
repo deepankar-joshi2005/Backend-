@@ -92,6 +92,20 @@ const leadSchema = new mongoose.Schema(
     followUpType: { type: String, enum: FOLLOWUP_TYPES, default: null },
     followUpNote: { type: String, trim: true },
 
+    // Automated follow-up reminder bookkeeping: the followUpDate a reminder was
+    // last sent for (jobs/notificationJobs.ts). Rescheduling the follow-up to a
+    // new date makes it eligible for a fresh reminder.
+    followUpReminderSentFor: { type: Date, default: null },
+
+    // Whether this lead/client may receive automated email/WhatsApp messages
+    // (CRM follow-up reminders, compliance deadline alerts, report shares) —
+    // Module Scope doc, Section 6.1 opt-out per channel.
+    notificationPreferences: {
+      email: { type: Boolean, default: true },
+      whatsapp: { type: Boolean, default: true },
+      _id: false,
+    },
+
     // 9. Notes — a static description, separate from the timestamped activity log below.
     description: { type: String, trim: true },
 

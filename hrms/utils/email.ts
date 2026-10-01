@@ -2,6 +2,8 @@ import nodemailer from "nodemailer";
 import fs from "fs";
 import path from "path";
 import dns from "dns";
+import User from "../models/User";
+import Company from "../models/hrms/Company";
 
 // This environment's IPv6 route to Gmail is unreachable and stalls SMTP
 // connections until they time out. Prefer IPv4 so failures (or successes)
@@ -16,6 +18,44 @@ dns.setDefaultResultOrder("ipv4first");
 //     pass: process.env.SMTP_PASS,
 //   },
 // });
+// ── Branding ──────────────────────────────────────────────────────────────
+// Every HRMS email is branded with the recipient's own company — the Business
+// Client whose HRMS this is — never a fixed product name. Callers that already
+// know the company pass brandName; otherwise it's resolved from the recipient's
+// HRMS login (email → User.companyId → Company.name). HRMS_BRAND_NAME (or
+// "HRMS") is only the last-resort fallback for an address with no HRMS user.
+export async function resolveBrandName(to?: string | null, brandName?: string | null) {
+  if (brandName && brandName.trim()) return brandName.trim();
+  try {
+    if (to) {
+      const user: any = await User.findOne({ email: String(to).toLowerCase().trim() }).select("companyId").lean();
+      if (user?.companyId) {
+        const company: any = await Company.findById(user.companyId).select("name").lean();
+        if (company?.name) return company.name;
+      }
+    }
+  } catch (err) {
+    console.error("Failed to resolve HRMS email brand:", (err as Error).message);
+  }
+  return process.env.HRMS_BRAND_NAME || "HRMS";
+}
+
+// Display name = the company; the mailbox stays the configured sender address
+// (FROM_EMAIL may be either "addr" or "Name <addr>").
+function fromHeader(brand: string) {
+  const configured = process.env.FROM_EMAIL || process.env.SMTP_USER || "";
+  const address = configured.match(/<([^>]+)>/)?.[1] || configured;
+  return address ? `"${brand.replace(/"/g, "")}" <${address}>` : undefined;
+}
+
+function loginBaseUrl() {
+  return process.env.APP_BASE_URL || process.env.FRONTEND_URL || (process.env.CLIENT_URL || "").split(",")[0] || "";
+}
+
+export function hrmsLoginUrl() {
+  return `${loginBaseUrl()}/login`;
+}
+
 export enum CommonEmailType {
   RESIGNATION_APPROVED = "RESIGNATION_APPROVED",
   RESIGNATION_REJECTED = "RESIGNATION_REJECTED", // ✅ ADD THIS
@@ -33,32 +73,40 @@ interface CommonEmailPayload {
   to: string;
   name: string;
   data?: any;
+  brandName?: string | null;
 }
 
 export async function sendCommonEmail(payload: CommonEmailPayload) {
-  const { subject, html } = getCommonTemplate(payload);
+  const brand = await resolveBrandName(payload.to, payload.brandName);
+  const { subject, html } = getCommonTemplate({ ...payload, brand });
 
   await transporter.sendMail({
-    from: process.env.FROM_EMAIL,
+    from: fromHeader(brand),
     to: payload.to,
     subject,
     html,
   });
 }
 
-function getCommonTemplate({
+// Subject + HTML for a CommonEmailType — exported so the HRMS notification
+// engine (hrmsNotify.ts) can reuse the same templates.
+export function getCommonTemplate({
   type,
   name,
   data,
+  brand,
 }: {
   type: CommonEmailType;
   name: string;
   data?: any;
+  brand: string;
 }) {
+  const wrapper = (content: string) => brandedWrapper(content, brand);
+
   switch (type) {
     case CommonEmailType.RESIGNATION_APPROVED:
       return {
-        subject: "Resignation Approved — ThinkPro LMS",
+        subject: `Resignation Approved — ${brand}`,
         html: wrapper(`
           <p>Hi <b>${name}</b>,</p>
           <p>Your resignation request has been <b>approved</b>.</p>
@@ -121,7 +169,8 @@ function getCommonTemplate({
         subject: "Leave Approved",
         html: wrapper(`
           <p>Hi <b>${name}</b>,</p>
-          <p>Your leave request has been approved.</p>
+          <p>Your leave request${data?.from ? ` (${new Date(data.from).toLocaleDateString("en-IN")} – ${new Date(data.to).toLocaleDateString("en-IN")})` : ""} has been <b>approved</b>.</p>
+          ${data?.remark ? `<p><b>Remark:</b> ${data.remark}</p>` : ""}
         `),
       };
 
@@ -130,7 +179,8 @@ function getCommonTemplate({
         subject: "Leave Rejected",
         html: wrapper(`
           <p>Hi <b>${name}</b>,</p>
-          <p>Your leave request has been rejected.</p>
+          <p>Your leave request${data?.from ? ` (${new Date(data.from).toLocaleDateString("en-IN")} – ${new Date(data.to).toLocaleDateString("en-IN")})` : ""} has been <b>rejected</b>.</p>
+          ${data?.remark ? `<p><b>Remark:</b> ${data.remark}</p>` : ""}
         `),
       };
 
@@ -147,13 +197,13 @@ function getCommonTemplate({
         </a>
       </p>
 
-      <p>Thanks,<br/>HR Team</p>
+      <p>Thanks,<br/>${brand} HR Team</p>
     `),
       };
 
     case CommonEmailType.GENERAL_NOTIFICATION:
       return {
-        subject: data?.subject || "Notification — ThinkPro LMS",
+        subject: data?.subject || `Notification — ${brand}`,
         html: wrapper(`
           <p>Hi <b>${name}</b>,</p>
           <p>${data?.message}</p>
@@ -161,7 +211,7 @@ function getCommonTemplate({
       };
     case CommonEmailType.RESIGNATION_REJECTED:
       return {
-        subject: "Resignation Rejected — ThinkPro LMS",
+        subject: `Resignation Rejected — ${brand}`,
         html: wrapper(`
       <p>Hi <b>${name}</b>,</p>
       <p>Your resignation request has been <b>rejected</b>.</p>
@@ -173,10 +223,10 @@ function getCommonTemplate({
       throw new Error("Invalid email type");
   }
 }
-function wrapper(content: string) {
+function brandedWrapper(content: string, brand: string) {
   return `
     <div style="font-family:Arial;max-width:600px;margin:auto;padding:20px">
-      <h2 style="color:#0066ff">ThinkPro LMS</h2>
+      <h2 style="color:#0066ff">${brand}</h2>
       ${content}
       <hr/>
       <p style="font-size:12px;color:#777">
@@ -193,6 +243,23 @@ const transporter = nodemailer.createTransport({
     pass: process.env.SMTP_PASS,
   },
 });
+// Low-level branded send used by the HRMS notification engine (hrmsNotify.ts).
+export async function sendBrandedMail({
+  to,
+  subject,
+  html,
+  brand,
+  attachments,
+}: {
+  to: string;
+  subject: string;
+  html: string;
+  brand: string;
+  attachments?: any[];
+}) {
+  await transporter.sendMail({ from: fromHeader(brand), to, subject, html, ...(attachments?.length ? { attachments } : {}) });
+}
+
 export const sendEmail = async ({
   to,
   subject,
@@ -224,12 +291,15 @@ export async function sendSetupEmail({
   name,
   token,
   role = "Administrator",
+  brandName,
 }: {
   to: string;
   name: string;
   token: string;
   role?: string;
+  brandName?: string | null;
 }) {
+  const brand = await resolveBrandName(to, brandName);
   const link = `${process.env.APP_BASE_URL}/setup/${token}`;
   const html = `
     <!DOCTYPE html>
@@ -261,11 +331,11 @@ export async function sendSetupEmail({
     <body>
       <div class="container">
         <div class="header">
-          <h2 style="margin: 0; color: #0066ff;">ThinkPro LMS ${role} Invitation</h2>
+          <h2 style="margin: 0; color: #0066ff;">${brand} — ${role} Invitation</h2>
         </div>
         <div class="content">
           <p>Hi <strong>${name}</strong>,</p>
-          <p>You have been invited to join the ThinkPro LMS as a ${role}. We're excited to have you on board!</p>
+          <p>You have been invited to join ${brand} as a ${role}. We're excited to have you on board!</p>
           <p>To get started, please set up your password and activate your account by clicking the button below:</p>
           <a href="${link}" style="color: #ffffff; text-decoration: none;">
             <div class="button">Set Up Account</div>
@@ -283,9 +353,9 @@ export async function sendSetupEmail({
   `;
 
   await transporter.sendMail({
-    from: process.env.FROM_EMAIL,
+    from: fromHeader(brand),
     to,
-    subject: `ThinkPro LMS — ${role} Invitation`,
+    subject: `${brand} — ${role} Invitation`,
     html,
   });
 }
@@ -294,11 +364,15 @@ export async function sendPasswordResetEmail({
   to,
   name,
   newPassword,
+  brandName,
 }: {
   to: string;
   name: string;
   newPassword: string;
+  brandName?: string | null;
 }) {
+  const brand = await resolveBrandName(to, brandName);
+  const loginUrl = `${loginBaseUrl()}/login`;
   const html = `
     <!DOCTYPE html>
     <html>
@@ -334,18 +408,18 @@ export async function sendPasswordResetEmail({
     <body>
       <div class="container">
         <div class="header">
-          <h2 style="margin: 0; color: #0066ff;">ThinkPro LMS — Password Reset Notification</h2>
+          <h2 style="margin: 0; color: #0066ff;">${brand} — Password Reset Notification</h2>
         </div>
         <div class="content">
           <p>Hi <strong>${name}</strong>,</p>
-          <p>Your password has been reset by a SuperAdmin. Please use the following new password to log in:</p>
+          <p>Your password has been reset by your administrator. Please use the following new password to log in:</p>
           <div class="password-box">
             ${newPassword}
           </div>
           <div class="warning">
             <strong>⚠️ Security Notice:</strong> For your security, please change this password immediately after logging in.
           </div>
-          <p>You can log in at: <a href="${process.env.APP_BASE_URL || 'https://thinkpro.com'}/login">${process.env.APP_BASE_URL || 'https://thinkpro.com'}/login</a></p>
+          <p>You can log in at: <a href="${loginUrl}">${loginUrl}</a></p>
         </div>
         <div class="footer">
           <p>This is an automated message, please do not reply to this email.</p>
@@ -357,9 +431,9 @@ export async function sendPasswordResetEmail({
   `;
 
   await transporter.sendMail({
-    from: process.env.FROM_EMAIL,
+    from: fromHeader(brand),
     to,
-    subject: `ThinkPro LMS — Password Reset Notification`,
+    subject: `${brand} — Password Reset Notification`,
     html,
   });
 }
@@ -368,11 +442,14 @@ export async function sendForgotPasswordEmail({
   to,
   name,
   token,
+  brandName,
 }: {
   to: string;
   name: string;
   token: string;
+  brandName?: string | null;
 }) {
+  const brand = await resolveBrandName(to, brandName);
   const link = `${process.env.APP_BASE_URL || process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password/${token}`;
   const html = `
     <!DOCTYPE html>
@@ -412,11 +489,11 @@ export async function sendForgotPasswordEmail({
     <body>
       <div class="container">
         <div class="header">
-          <h2 style="margin: 0; color: #0066ff;">ThinkPro LMS — Password Reset Request</h2>
+          <h2 style="margin: 0; color: #0066ff;">${brand} — Password Reset Request</h2>
         </div>
         <div class="content">
           <p>Hi <strong>${name}</strong>,</p>
-          <p>We received a request to reset your password for your ThinkPro LMS account.</p>
+          <p>We received a request to reset your password for your ${brand} HRMS account.</p>
           <p>Click the button below to reset your password. This link will expire in 1 hour.</p>
           <a href="${link}" style="color: #ffffff; text-decoration: none;">
             <div class="button">Reset Password</div>
@@ -437,9 +514,9 @@ export async function sendForgotPasswordEmail({
   `;
 
   await transporter.sendMail({
-    from: process.env.FROM_EMAIL,
+    from: fromHeader(brand),
     to,
-    subject: `ThinkPro LMS — Password Reset Request`,
+    subject: `${brand} — Password Reset Request`,
     html,
   });
 }
@@ -510,7 +587,7 @@ export async function sendPayrollApprovalEmail({
   `;
 
   await transporter.sendMail({
-    from: process.env.FROM_EMAIL,
+    from: fromHeader(companyName),
     to,
     subject: `Action required: Approve ${monthLabel} payroll for ${companyName}`,
     html,
@@ -524,16 +601,20 @@ export async function sendUserCredentialsEmail({
   password,
   role,
   employeeId,
+  brandName,
 }: {
   to: string;
   name: string;
   password: string;
   role: string;
   employeeId:string;
+  brandName?: string | null;
 }) {
+  const brand = await resolveBrandName(to, brandName);
+  const loginUrl = `${loginBaseUrl()}/login`;
   const html = `
     <div style="font-family: Arial, sans-serif; max-width:600px; margin:auto">
-      <h2>Welcome to ThinkPro LMS 🎉</h2>
+      <h2>Welcome to ${brand} 🎉</h2>
 
       <p>Hi <strong>${name}</strong>,</p>
 
@@ -549,20 +630,20 @@ export async function sendUserCredentialsEmail({
 
       <p>
         Login here:
-        <a href="${process.env.APP_BASE_URL}/login">
-          ${process.env.APP_BASE_URL}/login
+        <a href="${loginUrl}">
+          ${loginUrl}
         </a>
       </p>
 
       <br/>
-      <p>— ThinkPro LMS Team</p>
+      <p>— ${brand} HR Team</p>
     </div>
   `;
 
   await transporter.sendMail({
-    from: process.env.FROM_EMAIL,
+    from: fromHeader(brand),
     to,
-    subject: "Your ThinkPro LMS Account Credentials",
+    subject: `Your ${brand} HRMS Account Credentials`,
     html,
   });
 }
@@ -573,6 +654,7 @@ export async function sendLetterEmail({
   message,
   filePath,
   originalName,
+  brandName,
 }: {
   to: string;
   name: string;
@@ -580,7 +662,9 @@ export async function sendLetterEmail({
   message?: string;
   filePath: string;
   originalName: string;
+  brandName?: string | null;
 }) {
+  const brand = await resolveBrandName(to, brandName);
   const absolutePath = path.join(process.cwd(), filePath);
 
   const html = `
@@ -590,7 +674,7 @@ export async function sendLetterEmail({
       <div style="max-width:600px;margin:auto;background:#fff;padding:20px;border-radius:8px">
         
         <h2 style="color:#0066ff;margin-bottom:10px">
-          ThinkPro LMS — ${letterType}
+          ${brand} — ${letterType}
         </h2>
 
         <p>Hi <strong>${name}</strong>,</p>
@@ -615,7 +699,7 @@ export async function sendLetterEmail({
 
         <p style="margin-top:30px">
           Regards,<br/>
-          <strong>ThinkPro LMS Team</strong>
+          <strong>${brand} HR Team</strong>
         </p>
 
         <p style="font-size:12px;color:#777;margin-top:20px">
@@ -627,9 +711,9 @@ export async function sendLetterEmail({
   `;
 
   await transporter.sendMail({
-    from: process.env.FROM_EMAIL,
+    from: fromHeader(brand),
     to,
-    subject: `ThinkPro LMS — ${letterType}`,
+    subject: `${brand} — ${letterType}`,
     html,
     attachments: [
       {

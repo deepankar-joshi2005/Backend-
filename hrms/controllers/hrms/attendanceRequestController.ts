@@ -5,7 +5,8 @@ import AttendanceRequest from "../../models/hrms/AttendanceRequest";
 import Attendance from "../../models/hrms/Attendance";
 import { AuthRequest } from "../../middleware/auth";
 import User from "../../models/User";
-import { CommonEmailType, sendCommonEmail } from "../../utils/email";
+import { CommonEmailType } from "../../utils/email";
+import { notifyHrmsUserInBackground, formatHrmsDate } from "../../utils/hrmsNotify";
 import { ROLES } from "../../constants";
 /* ================= CREATE ================= */
 export const createRequest = async (req: AuthRequest, res: Response) => {
@@ -170,14 +171,20 @@ export const updateAttendanceRequestStatus = async (
       return res.status(404).json({ message: "User not found" });
     }
 
-    // 📧 EMAIL — APPROVED / REJECTED
-    await sendCommonEmail({
-      type: CommonEmailType.ATTENDANCE_REQUEST,
-      to: user.email,
-      name: user.name,
-      data: {
-        status,
-        adminRemark,
+    // Status change → employee is notified in-app + email + WhatsApp
+    // (Module Scope doc, Section 6.1). Background: never fails the approval.
+    const statusLabel = status === "APPROVED" ? "approved" : "rejected";
+    notifyHrmsUserInBackground({
+      user,
+      event: "hrms_attendance_request_status",
+      title: `Attendance request ${statusLabel}`,
+      message: `Your attendance request for ${formatHrmsDate(attendance.date)} has been ${statusLabel}.${adminRemark ? ` Remark: ${adminRemark}` : ""}`,
+      type: status === "APPROVED" ? "success" : "warning",
+      link: "/hrms/employee/attendance/requests",
+      email: { template: CommonEmailType.ATTENDANCE_REQUEST, data: { status, adminRemark } },
+      whatsapp: {
+        params: { status: status === "APPROVED" ? "Approved" : "Rejected" },
+        fallbackText: `Your attendance request for ${formatHrmsDate(attendance.date)} has been ${statusLabel}.${adminRemark ? ` Remark: ${adminRemark}` : ""}`,
       },
     });
 

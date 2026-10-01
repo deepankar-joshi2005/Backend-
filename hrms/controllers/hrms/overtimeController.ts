@@ -4,6 +4,7 @@ import { Request, Response } from "express";
 import Overtime from "../../models/hrms/Overtime";
 import { AuthRequest } from "../../middleware/auth";
 import User from "../../models/User";
+import { notifyRequestStatus } from "../../utils/hrmsNotify";
 /* ================= CREATE ================= */
 export const createOvertime = async (req: AuthRequest, res: Response) => {
   try {
@@ -109,6 +110,10 @@ export const updateOvertime = async (req: AuthRequest, res: Response) => {
     }
 
     await overtime.save();
+
+    if (req.user.role === "manager") {
+      notifyRequestStatus({ employeeId: overtime.employee, requestType: "Overtime", status, link: "/hrms/employee/request/overtime" });
+    }
 
     res.json({
       message: "Overtime request updated successfully",

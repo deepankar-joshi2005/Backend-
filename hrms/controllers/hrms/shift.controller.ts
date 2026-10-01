@@ -2,7 +2,26 @@
 
 import { Request, Response } from "express";
 import ShiftAssignment from "../../models/hrms/ShiftAssignment";
-import { sendCommonEmail, CommonEmailType, sendEmail } from "../../utils/email";
+import { CommonEmailType } from "../../utils/email";
+import { notifyHrmsUserInBackground, formatHrmsDate } from "../../utils/hrmsNotify";
+
+// Shift assigned/changed → employee is notified in-app + email + WhatsApp
+// (Module Scope doc, Section 2 "Shift Roster" + Section 6.1 automatic
+// notifications). Fire-and-forget: never fails the assignment.
+function notifyShift(user: any, shift: string, date: any, updated = false) {
+  notifyHrmsUserInBackground({
+    user,
+    event: "hrms_shift_assigned",
+    title: updated ? "Shift updated" : "New shift assigned",
+    message: `Your shift on ${formatHrmsDate(date)} is ${shift}.`,
+    link: "/hrms/employee/attendance/shift-schedule",
+    email: { template: CommonEmailType.SHIFT_ASSIGNED, data: { shift, date, updated } },
+    whatsapp: {
+      params: { shift, date: formatHrmsDate(date) },
+      fallbackText: `Your shift on ${formatHrmsDate(date)} has been ${updated ? "updated to" : "set to"} ${shift}.`,
+    },
+  });
+}
 import User from "../../models/User";
 /* ===============================
    GET SHIFTS BY WEEK
@@ -78,22 +97,7 @@ export const assignShift = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // 📧 EMAIL — SHIFT ASSIGNED (best-effort — must not fail the request if it errors)
-    if (user.email) {
-      try {
-        await sendCommonEmail({
-          to: user.email,
-          name: user.name,
-          type: CommonEmailType.SHIFT_ASSIGNED,
-          data: {
-            shift: shift,
-            date: date,
-          },
-        });
-      } catch (emailError) {
-        console.error(`Failed to send shift email to ${user.email}:`, emailError);
-      }
-    }
+    notifyShift(user, shift, date);
 
     res.json({
       message: "Shift assigned successfully",
@@ -126,26 +130,8 @@ export const bulkAssignShift = async (req: Request, res: Response) => {
 
     await ShiftAssignment.bulkWrite(operations);
 
-    // 📧 EMAIL ALL USERS (best-effort — must not fail the request if it errors)
     const users = await User.find({ _id: { $in: userIds } });
-
-    for (const user of users) {
-      if (user.email) {
-        try {
-          await sendCommonEmail({
-            to: user.email,
-            name: user.name,
-            type: CommonEmailType.SHIFT_ASSIGNED,
-            data: {
-              shift: shift,
-              date: date,
-            },
-          });
-        } catch (emailError) {
-          console.error(`Failed to send shift email to ${user.email}:`, emailError);
-        }
-      }
-    }
+    for (const user of users) notifyShift(user, shift, date);
 
     res.json({ message: "Shifts assigned successfully" });
   } catch (error) {
@@ -174,23 +160,7 @@ export const updateShift = async (req: Request, res: Response) => {
 
     // 🔹 Get user
     const user = await User.findById(updated.userId);
-    if (user?.email) {
-      // 📧 SHIFT UPDATED MAIL (best-effort — must not fail the request if it errors)
-      try {
-        await sendCommonEmail({
-          type: CommonEmailType.SHIFT_ASSIGNED, // reuse same template
-          to: user.email,
-          name: user.name,
-          data: {
-            shift: shift,
-            date: updated.date,
-            updated: true, // optional flag
-          },
-        });
-      } catch (emailError) {
-        console.error(`Failed to send shift update email to ${user.email}:`, emailError);
-      }
-    }
+    if (user) notifyShift(user, shift, updated.date, true);
 
     res.json({
       message: "Shift updated successfully",

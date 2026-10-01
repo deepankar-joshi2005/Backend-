@@ -25,12 +25,14 @@ function buildFromHeader() {
 }
 
 // Fire-and-forget by convention at the call site — a failed email must never
-// break the action that triggered it (e.g. CA firm onboarding).
-export async function sendMail({ to, subject, html }) {
+// break the action that triggered it (e.g. CA firm onboarding). Resolves true
+// when handed to SMTP, false when SMTP isn't configured (the notification
+// engine logs that as "skipped" rather than "sent").
+export async function sendMail({ to, subject, html, attachments }: { to: string; subject: string; html: string; attachments?: any[] }) {
   const client = getTransporter();
   if (!client) {
     console.warn(`SMTP not configured — skipped email "${subject}" to ${to}`);
-    return;
+    return false;
   }
 
   await client.sendMail({
@@ -38,5 +40,7 @@ export async function sendMail({ to, subject, html }) {
     to,
     subject,
     html,
+    ...(attachments?.length ? { attachments } : {}),
   });
+  return true;
 }

@@ -5,6 +5,7 @@ import Letter from "../../models/hrms/Letter";
 import { AuthRequest } from "../../middleware/auth";
 import User from "../../models/User";
 import { sendLetterEmail } from "../../utils/email";
+import { notifyHrmsUserInBackground } from "../../utils/hrmsNotify";
 /* ======================================================
    SEND LETTER (HR / ADMIN)
    ====================================================== */
@@ -44,14 +45,30 @@ export const sendLetter = async (req: AuthRequest, res: Response) => {
       sentBy: req.user.id,
     });
 
-    // 🔥 SEND EMAIL WITH PDF
-    await sendLetterEmail({
-      to: user.email,
-      name: user.name,
-      letterType,
-      message,
-      filePath: letter.filePath,
-      originalName: letter.originalName,
+    // 🔥 SEND EMAIL WITH PDF — a formal document, so it always goes by email
+    // regardless of notification preferences. Best-effort: the letter is
+    // already saved and visible to the employee in HRMS.
+    try {
+      await sendLetterEmail({
+        to: user.email,
+        name: user.name,
+        letterType,
+        message,
+        filePath: letter.filePath,
+        originalName: letter.originalName,
+      });
+    } catch (emailError) {
+      console.error(`Failed to email letter to ${user.email}:`, emailError);
+    }
+
+    // In-app + WhatsApp heads-up (email already sent above).
+    notifyHrmsUserInBackground({
+      user,
+      event: "hrms_letter_issued",
+      title: `New ${letterType}`,
+      message: `A new ${letterType} has been issued to you.${message ? ` ${message}` : ""}`,
+      link: "/hrms/employee/letters",
+      whatsapp: { params: { letterType }, fallbackText: `A new ${letterType} has been issued to you. Please check your email or HRMS to download it.` },
     });
 
     res.status(201).json({

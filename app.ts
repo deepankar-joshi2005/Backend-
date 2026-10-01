@@ -45,7 +45,14 @@ app.use(
 // CA-Management's own payloads are far smaller and still fit comfortably under it.
 app.use((req, res, next) => {
   if (req.path.includes("/bulk-upload/parse")) return next();
-  express.json({ limit: "500mb" })(req, res, next);
+  express.json({
+    limit: "500mb",
+    // Meta's WhatsApp webhook is signed over the exact raw bytes
+    // (X-Hub-Signature-256) — keep them for that one route only.
+    verify: (req: any, _res, buf) => {
+      if (req.originalUrl?.startsWith("/api/v1/whatsapp/webhook")) req.rawBody = buf;
+    },
+  })(req, res, next);
 });
 app.use((req, res, next) => {
   if (req.path.includes("/bulk-upload/parse")) return next();

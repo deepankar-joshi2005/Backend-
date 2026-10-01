@@ -16,6 +16,7 @@ import complianceRoutes from "./complianceRoutes";
 import hrmsPlanTierRoutes from "./hrmsPlanTierRoutes";
 import financeTrackerRoutes from "./financeTrackerRoutes";
 import reportsRoutes from "./reportsRoutes";
+import whatsappRoutes from "./whatsappRoutes";
 
 const router = express.Router();
 
@@ -40,5 +41,6 @@ router.use("/compliance", complianceRoutes);
 router.use("/hrms-plan-tiers", hrmsPlanTierRoutes);
 router.use("/finance-tracker", financeTrackerRoutes);
 router.use("/reports", reportsRoutes);
+router.use("/whatsapp", whatsappRoutes);
 
 export default router;

@@ -62,6 +62,7 @@ import DocumentTypeRouter from "./hrms/documentType.routes";
 import DataManagementRouter from "./dataManagement.routes";
 import trainingManagementRouter from "./hrms/trainingManagement.routes";
 import myTrainingRouter from "./hrms/myTraining.routes";
+import hrmsNotificationRouter from "./hrms/hrmsNotification.routes";
 
 const rootRouter = Router();
 
@@ -139,6 +140,10 @@ rootRouter.use("/profile-update", authMiddleware, subscriptionMiddleware, Profil
 // authMiddleware itself), so a trainee stays restricted to /my-training only.
 rootRouter.use("/training", authMiddleware, subscriptionMiddleware, trainingManagementRouter);
 rootRouter.use("/my-training", authMiddleware, subscriptionMiddleware, myTrainingRouter);
+
+// In-app notification bell + channel preferences — deliberately outside
+// subscriptionMiddleware so a lapsed company's users can still read alerts.
+rootRouter.use("/hrms-notifications", authMiddleware, hrmsNotificationRouter);
 
 // States & Districts (Shared infrastructure)
 rootRouter.use("/states", stateDistrictRouter);

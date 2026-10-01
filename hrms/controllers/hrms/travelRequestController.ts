@@ -3,6 +3,7 @@ import { Response } from "express";
 import TravelRequest from "../../models/hrms/TravelRequest";
 import { AuthRequest } from "../../middleware/auth";
 import User from "../../models/User";
+import { notifyRequestStatus } from "../../utils/hrmsNotify";
 /* ================= CREATE ================= */
 export const createTravelRequest = async (req: AuthRequest, res: Response) => {
   try {
@@ -119,6 +120,10 @@ export const updateTravelRequestStatus = async (
       return res.status(404).json({ message: "Request not found" });
     }
 
+    if (["APPROVED", "REJECTED"].includes(status)) {
+      notifyRequestStatus({ employeeId: request.employee, requestType: "Travel", status, link: "/hrms/employee/request/my-requests" });
+    }
+
     res.json(request);
   } catch (error) {
     res.status(500).json({ message: "Failed to update status" });
@@ -166,6 +171,10 @@ export const updateManagerTravelStatus = async (
 
     if (!request) {
       return res.status(404).json({ message: "Request not found" });
+    }
+
+    if (["APPROVED", "REJECTED"].includes(status)) {
+      notifyRequestStatus({ employeeId: request.employee, requestType: "Travel", status, link: "/hrms/employee/request/my-requests" });
     }
 
     res.json(request);

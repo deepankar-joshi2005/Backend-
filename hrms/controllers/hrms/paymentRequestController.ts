@@ -4,6 +4,7 @@ import { Response } from "express";
 import { AuthRequest } from "../../middleware/auth";
 import { ROLES } from "../../constants";
 import User from "../../models/User";
+import { notifyRequestStatus } from "../../utils/hrmsNotify";
 import Expense from "../../models/hrms/Expense";
 import TravelRequest from "../../models/hrms/TravelRequest";
 import LeaveEncashment from "../../models/hrms/LeaveEncashment";
@@ -155,8 +156,21 @@ export const updatePaymentStatus = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    const wasPaid = record.paymentStatus === "PAID";
     record.paymentStatus = paymentStatus;
     await record.save();
+
+    // Finance has paid out an approved request → tell the employee.
+    if (paymentStatus === "PAID" && !wasPaid) {
+      const labels: Record<string, string> = { expense: "Expense", travel: "Travel", encashment: "Leave encashment" };
+      const label = labels[String(type)] || "Payment";
+      notifyRequestStatus({
+        employeeId: record.employee?._id || record.employee,
+        requestType: label,
+        status: "PAID",
+        link: "/hrms/employee/request/my-requests",
+      });
+    }
 
     res.json({ success: true, message: "Payment status updated", data: record });
   } catch (error) {

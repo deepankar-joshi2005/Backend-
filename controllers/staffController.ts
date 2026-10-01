@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { notifyAccountCreated } from "../utils/notificationEvents";
 import CaFirm from "../models/CaFirm";
 import User from "../models/User";
 import ApiError from "../utils/ApiError";
@@ -7,9 +8,6 @@ import { getPagination, buildMeta } from "../utils/paginate";
 import { generateTempPassword } from "../utils/generatePassword";
 import { sanitizeUser } from "../utils/sanitizeUser";
 import { writeAuditLog } from "../utils/writeAuditLog";
-import { getSystemSettings } from "../utils/getSystemSettings";
-import { sendMail } from "../utils/sendMail";
-import { credentialsWelcomeEmail } from "../utils/emailTemplates";
 
 const SALT_ROUNDS = Number(process.env.BCRYPT_SALT_ROUNDS) || 10;
 
@@ -79,20 +77,15 @@ export const createStaff = catchAsync(async (req, res) => {
     createdBy: req.user.id,
   });
 
-  try {
-    const settings = await getSystemSettings();
-    const { subject, html } = credentialsWelcomeEmail({
-      platformName: settings.platformName,
-      firmName: firm.name,
-      recipientName: staff.name,
-      email: staff.email,
-      password: usingOwnPassword ? password : tempPassword,
-      loginUrl: `${process.env.CLIENT_URL}/login`,
-    });
-    await sendMail({ to: staff.email, subject, html });
-  } catch (err) {
-    console.error("Failed to send staff welcome email:", err.message);
-  }
+  // New user → login credentials by email + WhatsApp heads-up (no password).
+  notifyAccountCreated({
+    caFirmId: firm._id,
+    organisationName: firm.name,
+    name: staff.name,
+    email: staff.email,
+    phone: staff.phone,
+    password: usingOwnPassword ? password : tempPassword,
+  });
 
   await writeAuditLog(req, {
     action: "staff.created",

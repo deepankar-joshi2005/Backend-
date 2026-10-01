@@ -206,6 +206,16 @@ const userSchema = new mongoose.Schema(
     // ever set true explicitly (Add User checkbox) — default false so this
     // field is a no-op for every pre-existing user.
     isTrainee: { type: Boolean, default: false },
+
+    /* ================= NOTIFICATIONS ================= */
+    // Per-channel opt-out — Module Scope doc, Section 6.1 ("Notification
+    // preference management (opt-out per channel)"). Enforced centrally in
+    // utils/hrmsNotify.ts; set by the user from the notification bell.
+    notificationPreferences: {
+      inApp: { type: Boolean, default: true },
+      email: { type: Boolean, default: true },
+      whatsapp: { type: Boolean, default: true },
+    },
   },
   { timestamps: true }
 );

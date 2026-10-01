@@ -7,6 +7,7 @@ import { generateUniqueSlug } from "../utils/slugify";
 import { sanitizeUser } from "../utils/sanitizeUser";
 import { getSystemSettings } from "../utils/getSystemSettings";
 import { createNotification } from "../utils/createNotification";
+import { notifyAccountCreated } from "../utils/notificationEvents";
 import { PLAN_LIMITS } from "../models/CaFirm";
 import { verifyHrmsLogin } from "../utils/provisionHrms";
 import {
@@ -81,6 +82,10 @@ export const registerFirm = catchAsync(async (req, res) => {
     scope: "super_admin",
     link: "ca-firms",
   });
+
+  // Self-serve signup — welcome email + WhatsApp (they chose their own password,
+  // so nothing secret is sent).
+  notifyAccountCreated({ caFirmId: firm._id, organisationName: firm.name, name: user.name, email: user.email, phone });
 
   const accessToken = await issueSession(res, user);
   res.status(201).json({

@@ -1,6 +1,11 @@
 import mongoose from "mongoose";
 import Notification from "../models/Notification";
 import CaFirm from "../models/CaFirm";
+import User from "../models/User";
+import NotificationLog from "../models/NotificationLog";
+import { getSystemSettings } from "../utils/getSystemSettings";
+import { currentMonthRange, resolveWhatsAppQuota } from "../utils/notify";
+import { isWhatsAppConfigured } from "../utils/whatsapp";
 import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
 
@@ -17,6 +22,7 @@ function buildAudienceFilter(user) {
         ],
       },
       { $or: [{ "audience.role": null }, { "audience.role": user.role }] },
+      { $or: [{ "audience.userId": null }, { "audience.userId": new mongoose.Types.ObjectId(user.id) }] },
     ],
   };
 }
@@ -119,4 +125,88 @@ export const sendNotification = catchAsync(async (req, res) => {
   });
 
   res.status(201).json({ success: true, data: notification, message: "Notification sent" });
+});
+
+// ── Channel preferences (Module Scope doc, Section 6.1: opt-out per channel) ──
+
+export const getMyNotificationPreferences = catchAsync(async (req, res) => {
+  const user = await User.findById(req.user.id).select("notificationPreferences");
+  if (!user) throw new ApiError(404, "User not found");
+  res.json({
+    success: true,
+    data: {
+      preferences: {
+        inApp: user.notificationPreferences?.inApp !== false,
+        email: user.notificationPreferences?.email !== false,
+        whatsapp: user.notificationPreferences?.whatsapp !== false,
+      },
+      whatsappConfigured: isWhatsAppConfigured(),
+    },
+  });
+});
+
+export const updateMyNotificationPreferences = catchAsync(async (req, res) => {
+  const update = {};
+  for (const channel of ["inApp", "email", "whatsapp"]) {
+    if (typeof req.body[channel] === "boolean") update[`notificationPreferences.${channel}`] = req.body[channel];
+  }
+  const user = await User.findByIdAndUpdate(req.user.id, { $set: update }, { new: true }).select("notificationPreferences");
+  if (!user) throw new ApiError(404, "User not found");
+  res.json({ success: true, data: { preferences: user.notificationPreferences }, message: "Notification preferences saved" });
+});
+
+// ── WhatsApp usage vs. included quota (Multi-Tenancy & Licensing doc, Sections 5/6) ──
+
+async function usageForFirms(firms, settings) {
+  const { start, end } = currentMonthRange();
+  const counts = await NotificationLog.aggregate([
+    {
+      $match: {
+        channel: "whatsapp",
+        status: "sent",
+        createdAt: { $gte: start, $lt: end },
+        caFirmId: { $in: firms.map((f) => f._id) },
+      },
+    },
+    { $group: { _id: "$caFirmId", sent: { $sum: 1 } } },
+  ]);
+  const sentByFirm = new Map(counts.map((c) => [c._id.toString(), c.sent]));
+
+  return firms.map((firm) => {
+    const sent = sentByFirm.get(firm._id.toString()) || 0;
+    const quota = resolveWhatsAppQuota(firm, settings);
+    const overage = quota === null ? 0 : Math.max(0, sent - quota);
+    return {
+      caFirmId: firm._id,
+      firmName: firm.name,
+      tier: firm.plan?.tier,
+      sent,
+      quota,
+      overage,
+      overageAmount: overage * (settings.whatsappOverageRate || 0),
+    };
+  });
+}
+
+export const getWhatsAppUsage = catchAsync(async (req, res) => {
+  const settings = await getSystemSettings();
+  const { start, end } = currentMonthRange();
+  const meta = {
+    whatsappConfigured: isWhatsAppConfigured(),
+    periodStart: start,
+    periodEnd: end,
+    overageRate: settings.whatsappOverageRate,
+    currency: settings.currency,
+  };
+
+  if (req.user.role === "super_admin") {
+    const firms = await CaFirm.find().select("name plan").sort({ name: 1 }).lean();
+    const rows = await usageForFirms(firms, settings);
+    return res.json({ success: true, data: { ...meta, firms: rows } });
+  }
+
+  const firm = await CaFirm.findById(req.user.caFirmId).select("name plan").lean();
+  if (!firm) throw new ApiError(404, "CA firm not found");
+  const [row] = await usageForFirms([firm], settings);
+  res.json({ success: true, data: { ...meta, ...row } });
 });

@@ -3,6 +3,7 @@ import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
 import { getPagination, buildMeta } from "../utils/paginate";
 import { computeFinanceSnapshot, computeLoanEligibility, projectInvestmentValue, PROJECTION_HORIZONS_YEARS } from "../utils/financeTrackerMath";
+import { shareFinanceReport } from "../utils/notificationEvents";
 
 // Staff only ever see their own tracked profiles; Admin sees every profile in the
 // firm — mirrors the same scoping rule the old Loan Calculator used for its history.
@@ -87,4 +88,53 @@ export const computeProjection = catchAsync(async (req, res) => {
   }));
 
   res.json({ success: true, data: { projections } });
+});
+
+function rupees(value) {
+  return `Rs. ${Math.round(Number(value) || 0).toLocaleString("en-IN")}`;
+}
+
+// "Send Report" — emails the report PDF to the client and sends it on WhatsApp
+// (Module Scope doc, Section 6.1: "send saved calculation/PDF summary directly
+// to client's WhatsApp"). Returns what happened on each channel so the UI can
+// say e.g. "Sent by email; WhatsApp not set up yet".
+export const shareReport = catchAsync(async (req, res) => {
+  const filter = scopeToRole(req, { _id: req.params.id, caFirmId: req.user.caFirmId });
+  const profile = await ClientFinanceProfile.findOne(filter);
+  if (!profile) throw new ApiError(404, "Finance profile not found");
+
+  const { channels, pdfBase64, fileName, annualRate, tenureMonths } = req.body;
+  if (channels.includes("email") && !profile.email) throw new ApiError(400, "Add the client's email address to send the report by email");
+  if (channels.includes("whatsapp") && !profile.phone) throw new ApiError(400, "Add the client's mobile number to send the report on WhatsApp");
+
+  const snapshot = computeFinanceSnapshot(profile);
+  const eligibility = computeLoanEligibility(profile, { annualRate, tenureMonths });
+  const summary = {
+    text: `Monthly income ${rupees(snapshot.monthlyIncome)}, EMIs ${rupees(snapshot.totalEmi)}, surplus ${rupees(snapshot.surplus)}, FOIR ${snapshot.foir}% (${snapshot.healthStatus}). Estimated additional loan eligibility ${rupees(eligibility.maxEligibleLoan)} at ${eligibility.annualRate}% for ${eligibility.tenureMonths} months.`,
+    details: [
+      ["Monthly income", rupees(snapshot.monthlyIncome)],
+      ["Monthly expenses", rupees(snapshot.totalExpenses)],
+      ["Total EMI obligations", rupees(snapshot.totalEmi)],
+      ["Monthly surplus", rupees(snapshot.surplus)],
+      ["FOIR", `${snapshot.foir}% (${snapshot.healthStatus})`],
+      ["Additional loan eligibility", `${rupees(eligibility.maxEligibleLoan)} (${eligibility.annualRate}% · ${eligibility.tenureMonths} months)`],
+    ],
+  };
+
+  let pdf = null;
+  if (pdfBase64) {
+    const buffer = Buffer.from(pdfBase64.replace(/^data:application\/pdf;base64,/, ""), "base64");
+    if (buffer.subarray(0, 4).toString() !== "%PDF") throw new ApiError(400, "Report attachment must be a PDF");
+    const safeName = (fileName || `${profile.name}-finance-report`).replace(/[^\w.-]+/g, "-").replace(/\.pdf$/i, "");
+    pdf = { buffer, filename: `${safeName}.pdf` };
+  }
+
+  const result = await shareFinanceReport({ profile, caFirmId: req.user.caFirmId, channels, pdf, summary });
+  const sentAny = result.email.status === "sent" || result.whatsapp.status === "sent";
+
+  res.status(sentAny ? 200 : 422).json({
+    success: sentAny,
+    data: result,
+    message: sentAny ? "Report sent" : "The report could not be sent on any channel",
+  });
 });

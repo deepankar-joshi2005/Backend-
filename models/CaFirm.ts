@@ -45,6 +45,9 @@ const caFirmSchema = new mongoose.Schema(
       billingCycle: { type: String, enum: ["monthly", "annual"], default: "monthly" },
       startDate: { type: Date, default: Date.now },
       expiryDate: { type: Date },
+      // Per-firm override of the tier's monthly WhatsApp quota (e.g. a
+      // negotiated Enterprise quota). null = use the tier default from SystemSettings.
+      whatsappQuota: { type: Number, default: null },
     },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "CaUser", default: null },
     isActive: { type: Boolean, default: true },
