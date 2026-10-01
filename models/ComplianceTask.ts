@@ -35,6 +35,11 @@ const complianceTaskSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true },
     category: { type: String, enum: COMPLIANCE_CATEGORIES, default: "other" },
+    // Free-form filing type within a category (e.g. category "gst" -> "gstr1",
+    // "gstr3b", ...). Not enum-validated here since the controlled vocabulary
+    // per category lives on the frontend (CompliancePage's TASK_CATALOG) —
+    // same reasoning as the model-comment above re: no separate template collection.
+    subCategory: { type: String, trim: true, default: "" },
     recurrence: { type: String, enum: COMPLIANCE_RECURRENCE, default: "one_time" },
     dueDate: { type: Date, required: true },
     status: { type: String, enum: COMPLIANCE_STATUSES, default: "pending" },

@@ -3,7 +3,7 @@ import CaFirm from "../models/CaFirm";
 import User from "../models/User";
 import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
-import { getPagination, buildMeta } from "../utils/paginate";
+import { getPagination, buildMeta, getDateRangeFilter } from "../utils/paginate";
 import { generateTempPassword } from "../utils/generatePassword";
 import { sanitizeUser } from "../utils/sanitizeUser";
 import { writeAuditLog } from "../utils/writeAuditLog";
@@ -15,7 +15,7 @@ const SALT_ROUNDS = Number(process.env.BCRYPT_SALT_ROUNDS) || 10;
 
 export const listStaff = catchAsync(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
-  const filter = { caFirmId: req.user.caFirmId, role: "ca_firm_staff" };
+  const filter: any = { caFirmId: req.user.caFirmId, role: "ca_firm_staff", ...getDateRangeFilter(req.query, "createdAt") };
   if (req.query.search) {
     filter.$or = [
       { name: { $regex: req.query.search, $options: "i" } },

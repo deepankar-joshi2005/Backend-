@@ -1,7 +1,7 @@
 import User from "../models/User";
 import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
-import { getPagination, buildMeta } from "../utils/paginate";
+import { getPagination, buildMeta, getDateRangeFilter } from "../utils/paginate";
 import { sanitizeUser } from "../utils/sanitizeUser";
 import { writeAuditLog } from "../utils/writeAuditLog";
 
@@ -12,7 +12,7 @@ import { writeAuditLog } from "../utils/writeAuditLog";
 // tenant data stays off-limits.
 export const listUsers = catchAsync(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
-  const filter = {};
+  const filter = { ...getDateRangeFilter(req.query, "createdAt") };
   if (req.query.role) filter.role = req.query.role;
   if (req.query.search) {
     filter.$or = [

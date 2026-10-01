@@ -19,6 +19,7 @@ function withSnapshot(profile) {
 export const listProfiles = catchAsync(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
   const filter = scopeToRole(req, { caFirmId: req.user.caFirmId });
+  if (req.query.search) filter.name = { $regex: req.query.search, $options: "i" };
 
   const [profiles, total] = await Promise.all([
     ClientFinanceProfile.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),

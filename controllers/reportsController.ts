@@ -6,6 +6,7 @@ import ClientEmployee from "../models/ClientEmployee";
 import HrmsCompany from "../hrms/models/hrms/Company";
 import HrmsUser from "../hrms/models/User";
 import catchAsync from "../utils/catchAsync";
+import { getPagination, buildMeta, getDateRangeFilter } from "../utils/paginate";
 
 // Super Admin's platform-wide reporting suite — pulls together CA firm
 // licensing, business client HRMS subscriptions, staff headcount and
@@ -48,6 +49,14 @@ function getPeriodStart(period) {
   }
 }
 
+// period=custom hands off to explicit ?startDate=&endDate= (yyyy-MM-dd) instead
+// of one of the fixed PERIODS buckets above.
+function getCreatedFilter(query) {
+  if (query.period === "custom") return getDateRangeFilter(query, "createdAt");
+  const start = getPeriodStart(query.period);
+  return start ? { createdAt: { $gte: start } } : {};
+}
+
 // Last 6 calendar months (including the current one), oldest first, with
 // zero-filled gaps — mirrors dashboardController.getSignupTrend but reusable
 // across any model/date field.
@@ -73,8 +82,7 @@ async function getMonthlyTrend(Model, dateField = "createdAt") {
 // Headline numbers + breakdowns + 6-month trend — the "at a glance" hero
 // section of the Reports page.
 export const getReportsOverview = catchAsync(async (req, res) => {
-  const periodStart = getPeriodStart(req.query.period as string);
-  const createdFilter = periodStart ? { createdAt: { $gte: periodStart } } : {};
+  const createdFilter = getCreatedFilter(req.query);
 
   const [
     totalCaFirms,
@@ -133,7 +141,7 @@ export const getReportsOverview = catchAsync(async (req, res) => {
   res.json({
     success: true,
     data: {
-      period: PERIODS.includes(req.query.period as string) ? req.query.period : null,
+      period: PERIODS.includes(req.query.period as string) || req.query.period === "custom" ? req.query.period : null,
       totals: {
         caFirms: totalCaFirms,
         businessClients: totalBusinessClients,
@@ -159,11 +167,13 @@ export const getReportsOverview = catchAsync(async (req, res) => {
 // real employee headcount. Powers the Reports page's expandable "CA Firms"
 // hierarchy (firm -> its business clients -> employees), not just flat totals.
 export const getCaFirmsReport = catchAsync(async (req, res) => {
-  const periodStart = getPeriodStart(req.query.period as string);
-  const createdFilter = periodStart ? { createdAt: { $gte: periodStart } } : {};
+  const { page, limit, skip } = getPagination(req.query);
+  const filter: any = getCreatedFilter(req.query);
+  if (req.query.search) filter.name = { $regex: req.query.search, $options: "i" };
 
-  const [firms, admins, clients, staffCountRows, nonHrmsEmployeeRows] = await Promise.all([
-    CaFirm.find(createdFilter).select("name plan isActive createdAt").sort({ createdAt: -1 }).lean(),
+  const [firms, firmsTotal, admins, clients, staffCountRows, nonHrmsEmployeeRows] = await Promise.all([
+    CaFirm.find(filter).select("name plan isActive createdAt").sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+    CaFirm.countDocuments(filter),
     User.find({ role: "ca_firm_admin" }).select("name email caFirmId").lean(),
     BusinessClient.find().select("name caFirmId hrmsCompanyId useHrms isActive").lean(),
     User.aggregate([{ $match: { role: "ca_firm_staff" } }, { $group: { _id: "$caFirmId", count: { $sum: 1 } } }]),
@@ -229,20 +239,26 @@ export const getCaFirmsReport = catchAsync(async (req, res) => {
     };
   });
 
-  res.json({ success: true, data });
+  res.json({ success: true, data, meta: buildMeta({ page, limit, total: firmsTotal }) });
 });
 
 // Per-business-client drill-down: owning firm, HRMS plan, and real employee
 // headcount (ClientEmployee for Excel-based clients, HRMS user count for the rest).
 export const getBusinessClientsReport = catchAsync(async (req, res) => {
-  const periodStart = getPeriodStart(req.query.period as string);
-  const createdFilter = periodStart ? { createdAt: { $gte: periodStart } } : {};
+  const { page, limit, skip } = getPagination(req.query);
+  const filter: any = getCreatedFilter(req.query);
+  if (req.query.search) filter.name = { $regex: req.query.search, $options: "i" };
 
-  const clients = await BusinessClient.find(createdFilter)
-    .select("name useHrms hrmsCompanyId isActive caFirmId createdAt")
-    .populate("caFirmId", "name")
-    .sort({ createdAt: -1 })
-    .lean();
+  const [clients, clientsTotal] = await Promise.all([
+    BusinessClient.find(filter)
+      .select("name useHrms hrmsCompanyId isActive caFirmId createdAt")
+      .populate("caFirmId", "name")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    BusinessClient.countDocuments(filter),
+  ]);
 
   const hrmsCompanyObjectIds = clients.map((c) => toObjectId(c.hrmsCompanyId)).filter(Boolean);
 
@@ -283,7 +299,7 @@ export const getBusinessClientsReport = catchAsync(async (req, res) => {
     };
   });
 
-  res.json({ success: true, data });
+  res.json({ success: true, data, meta: buildMeta({ page, limit, total: clientsTotal }) });
 });
 
 // Combined subscription health across both tenant tiers — CA firm licences
@@ -358,8 +374,24 @@ export const getSubscriptionsReport = catchAsync(async (req, res) => {
       .map((c: any) => ({ type: "business_client", name: c.clientName, planTier: c.planTier, expiryDate: c.expiryDate, daysLeft: c.daysLeft })),
   ].sort((a, b) => (a.daysLeft ?? 0) - (b.daysLeft ?? 0));
 
+  // Both tables are already computed in full above (expiringSoon needs the
+  // complete, unpaginated lists to merge/sort correctly) — paginate each
+  // independently here, after computation, rather than re-querying.
+  const { page: firmPage, limit: firmLimit } = getPagination({ page: req.query.firmPage, limit: req.query.firmLimit });
+  const { page: clientPage, limit: clientLimit } = getPagination({ page: req.query.clientPage, limit: req.query.clientLimit });
+  const firmStart = (firmPage - 1) * firmLimit;
+  const clientStart = (clientPage - 1) * clientLimit;
+
   res.json({
     success: true,
-    data: { caFirmSubscriptions, businessClientSubscriptions, expiringSoon },
+    data: {
+      caFirmSubscriptions: caFirmSubscriptions.slice(firmStart, firmStart + firmLimit),
+      businessClientSubscriptions: businessClientSubscriptions.slice(clientStart, clientStart + clientLimit),
+      expiringSoon,
+    },
+    meta: {
+      caFirmSubscriptions: buildMeta({ page: firmPage, limit: firmLimit, total: caFirmSubscriptions.length }),
+      businessClientSubscriptions: buildMeta({ page: clientPage, limit: clientLimit, total: businessClientSubscriptions.length }),
+    },
   });
 });

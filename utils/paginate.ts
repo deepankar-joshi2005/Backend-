@@ -8,3 +8,18 @@ export function getPagination(query) {
 export function buildMeta({ page, limit, total }) {
   return { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) };
 }
+
+// Builds a Mongo range filter for `field` from ?startDate=&endDate= (yyyy-MM-dd,
+// as sent by the frontend's DateRangeFilter). Returns {} when neither is set,
+// so callers can always spread it into their filter object unconditionally.
+export function getDateRangeFilter(query, field = "createdAt"): Record<string, any> {
+  if (!query.startDate && !query.endDate) return {};
+  const range: { $gte?: Date; $lte?: Date } = {};
+  if (query.startDate) range.$gte = new Date(query.startDate);
+  if (query.endDate) {
+    const end = new Date(query.endDate);
+    end.setHours(23, 59, 59, 999);
+    range.$lte = end;
+  }
+  return { [field]: range };
+}

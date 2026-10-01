@@ -13,7 +13,7 @@ import ClientPayrollSettings from "../models/ClientPayrollSettings";
 import ClientPaymentFile from "../models/ClientPaymentFile";
 import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
-import { getPagination, buildMeta } from "../utils/paginate";
+import { getPagination, buildMeta, getDateRangeFilter } from "../utils/paginate";
 import { generateTempPassword } from "../utils/generatePassword";
 import { writeAuditLog } from "../utils/writeAuditLog";
 import { getSystemSettings } from "../utils/getSystemSettings";
@@ -227,10 +227,19 @@ export const getBusinessClientSummary = catchAsync(async (req, res) => {
 // is platform billing oversight, the same category of data Super Admin
 // already sees for CA Firm subscriptions.
 export const listBusinessClientsForSuperAdmin = catchAsync(async (req, res) => {
-  const clients = await BusinessClient.find()
-    .select("name useHrms hrmsCompanyId isActive caFirmId")
-    .populate("caFirmId", "name")
-    .sort({ createdAt: -1 });
+  const { page, limit, skip } = getPagination(req.query);
+  const filter = { ...getDateRangeFilter(req.query, "createdAt") };
+  if (req.query.search) filter.name = { $regex: req.query.search, $options: "i" };
+
+  const [clients, total] = await Promise.all([
+    BusinessClient.find(filter)
+      .select("name useHrms hrmsCompanyId isActive caFirmId")
+      .populate("caFirmId", "name")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    BusinessClient.countDocuments(filter),
+  ]);
 
   const hrmsCompanyIds = clients.map((c) => c.hrmsCompanyId).filter(Boolean);
   const companies = await HrmsCompany.find({ _id: { $in: hrmsCompanyIds } }).select(
@@ -255,6 +264,7 @@ export const listBusinessClientsForSuperAdmin = catchAsync(async (req, res) => {
         employeeLimit: company?.employeeLimit || null,
       };
     }),
+    meta: buildMeta({ page, limit, total }),
   });
 });
 
@@ -262,8 +272,10 @@ export const listBusinessClientsForSuperAdmin = catchAsync(async (req, res) => {
 
 export const listMyBusinessClients = catchAsync(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
-  const filter = { caFirmId: req.user.caFirmId };
+  const filter: any = { caFirmId: req.user.caFirmId, ...getDateRangeFilter(req.query, "createdAt") };
   if (req.query.search) filter.name = { $regex: req.query.search, $options: "i" };
+  if (req.query.tab === "hrms") filter.useHrms = { $ne: false };
+  else if (req.query.tab === "non-hrms") filter.useHrms = false;
 
   const [clients, total, firm] = await Promise.all([
     BusinessClient.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
@@ -492,7 +504,31 @@ export const listPayrollEligibleClients = catchAsync(async (req, res) => {
     email: l.email || null,
   }));
 
-  res.json({ success: true, data: [...businessClients, ...leadClients] });
+  let combined = [...businessClients, ...leadClients];
+
+  if (req.query.tab === "hrms") combined = combined.filter((r) => r.useHrms);
+  else if (req.query.tab === "non-hrms") combined = combined.filter((r) => !r.useHrms);
+
+  if (req.query.search) {
+    const q = String(req.query.search).toLowerCase();
+    combined = combined.filter((r) =>
+      [r.name, r.gstin, r.pan, r.contactPerson, r.phone].filter(Boolean).some((v) => String(v).toLowerCase().includes(q))
+    );
+  }
+
+  // Pagination is opt-in (only when the caller sends ?page=) — listClientDirectory
+  // reuses this same handler to power a full, unpaginated client picker
+  // (Personal Finance Tracker's "new workspace" dropdown), which needs every
+  // client in one shot rather than a page at a time.
+  if (req.query.page === undefined) {
+    return res.json({ success: true, data: combined });
+  }
+  const { page, limit, skip } = getPagination(req.query);
+  res.json({
+    success: true,
+    data: combined.slice(skip, skip + limit),
+    meta: buildMeta({ page, limit, total: combined.length }),
+  });
 });
 
 // Same combined list, exposed under a neutral name/route for features unrelated to
@@ -778,8 +814,25 @@ export const getMyEmployeeForm = catchAsync(async (req, res) => {
 });
 
 export const listMyEmployees = catchAsync(async (req, res) => {
-  const employees = await ClientEmployee.find({ businessClientId: req.user.businessClientId }).sort({ createdAt: -1 });
-  res.json({ success: true, data: employees });
+  const filter: any = {
+    businessClientId: req.user.businessClientId,
+    ...getDateRangeFilter(req.query, "createdAt"),
+  };
+  if (req.query.search) filter.name = { $regex: req.query.search, $options: "i" };
+
+  // Pagination is opt-in (only when the caller sends ?page=) — the "Export
+  // Employee IDs" CSV action needs the complete roster in one shot, not just
+  // whichever page the table happens to be showing.
+  if (req.query.page === undefined) {
+    const employees = await ClientEmployee.find(filter).sort({ createdAt: -1 });
+    return res.json({ success: true, data: employees });
+  }
+  const { page, limit, skip } = getPagination(req.query);
+  const [employees, total] = await Promise.all([
+    ClientEmployee.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+    ClientEmployee.countDocuments(filter),
+  ]);
+  res.json({ success: true, data: employees, meta: buildMeta({ page, limit, total }) });
 });
 
 export const createMyEmployee = catchAsync(async (req, res) => {
@@ -852,8 +905,16 @@ export const updateMyEmployee = catchAsync(async (req, res) => {
 export const listClientEmployees = catchAsync(async (req, res) => {
   const client = await BusinessClient.findOne({ _id: req.params.id, caFirmId: req.user.caFirmId });
   if (!client) throw new ApiError(404, "Business client not found");
-  const employees = await ClientEmployee.find({ businessClientId: client._id }).sort({ createdAt: -1 });
-  res.json({ success: true, data: employees });
+
+  const { page, limit, skip } = getPagination(req.query);
+  const filter: any = { businessClientId: client._id, ...getDateRangeFilter(req.query, "createdAt") };
+  if (req.query.search) filter.name = { $regex: req.query.search, $options: "i" };
+
+  const [employees, total] = await Promise.all([
+    ClientEmployee.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+    ClientEmployee.countDocuments(filter),
+  ]);
+  res.json({ success: true, data: employees, meta: buildMeta({ page, limit, total }) });
 });
 
 // ── Business Client Admin's own read-only view of their month-wise Salary

@@ -22,6 +22,7 @@ import ClientPayrollRun from "../models/ClientPayrollRun";
 import ClientPayrollEntry from "../models/ClientPayrollEntry";
 import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
+import { getPagination, buildMeta } from "../utils/paginate";
 import { writeAuditLog } from "../utils/writeAuditLog";
 import { buildStructureTemplateRows, parseStructureWorkbook, sendWorkbook, ParsedStructureRow, TemplateColumn } from "../utils/clientPayrollExcel";
 import { generateClientPayslipPDF } from "../utils/generateClientPayslipPDF";
@@ -785,8 +786,28 @@ export const runPayroll = catchAsync(async (req, res) => {
 
 export const listRuns = catchAsync(async (req, res) => {
   const client = await loadClient(req);
-  const runs = await ClientPayrollRun.find({ businessClientId: client._id }).sort({ month: -1 });
-  res.json({ success: true, data: runs });
+  const filter: any = { businessClientId: client._id };
+  // month is stored as "YYYY-MM" — lexicographic string comparison sorts the
+  // same as chronological order, so a plain string range works here.
+  if (req.query.monthFrom || req.query.monthTo) {
+    filter.month = {};
+    if (req.query.monthFrom) filter.month.$gte = req.query.monthFrom;
+    if (req.query.monthTo) filter.month.$lte = req.query.monthTo;
+  }
+
+  // Pagination is opt-in (only when the caller sends ?page=) — the payroll
+  // overview page's stat cards (this month's run, latest completed run,
+  // total run count) need the complete history in one shot.
+  if (req.query.page === undefined) {
+    const runs = await ClientPayrollRun.find(filter).sort({ month: -1 });
+    return res.json({ success: true, data: runs });
+  }
+  const { page, limit, skip } = getPagination(req.query);
+  const [runs, total] = await Promise.all([
+    ClientPayrollRun.find(filter).sort({ month: -1 }).skip(skip).limit(limit),
+    ClientPayrollRun.countDocuments(filter),
+  ]);
+  res.json({ success: true, data: runs, meta: buildMeta({ page, limit, total }) });
 });
 
 export const getRunDetail = catchAsync(async (req, res) => {

@@ -31,7 +31,18 @@ export const listTasks = catchAsync(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
   const filter = scopeToRole(req, { caFirmId: req.user.caFirmId });
   if (req.query.status) filter.status = req.query.status;
-  if (req.query.category) filter.category = req.query.category;
+  if (req.query.category) {
+    // Comma-separated from the "Task" multi-select filter (or a repeated-key
+    // array, depending on how the caller serializes it) — either way, one
+    // category selected stays an equality match, several become $in.
+    const categories = Array.isArray(req.query.category)
+      ? req.query.category
+      : String(req.query.category).split(",").filter(Boolean);
+    filter.category = categories.length > 1 ? { $in: categories } : categories[0];
+  }
+  if (req.query.subCategory) filter.subCategory = req.query.subCategory;
+  if (req.query.clientId) filter.clientId = req.query.clientId;
+  if (req.query.search) filter.title = { $regex: req.query.search, $options: "i" };
   // Used by the calendar view to pull exactly the visible month (padded to full
   // weeks) instead of relying on the 100-row pagination cap.
   if (req.query.dueFrom || req.query.dueTo) {
@@ -54,7 +65,7 @@ export const listTasks = catchAsync(async (req, res) => {
 });
 
 export const createTask = catchAsync(async (req, res) => {
-  const { title, category, recurrence, dueDate, clientId, assignedTo, documents } = req.body;
+  const { title, category, subCategory, recurrence, dueDate, clientId, assignedTo, documents } = req.body;
 
   // Role Matrix: "Create/assign compliance tasks — Staff: create for own clients" —
   // staff can only ever create tasks assigned to themselves.
@@ -64,6 +75,7 @@ export const createTask = catchAsync(async (req, res) => {
   const task = await ComplianceTask.create({
     title,
     category,
+    subCategory,
     recurrence,
     dueDate,
     clientId,
@@ -78,7 +90,7 @@ export const createTask = catchAsync(async (req, res) => {
 });
 
 export const updateTask = catchAsync(async (req, res) => {
-  const { title, category, recurrence, dueDate, status, clientId, assignedTo, documents } = req.body;
+  const { title, category, subCategory, recurrence, dueDate, status, clientId, assignedTo, documents } = req.body;
   const filter = scopeToRole(req, { _id: req.params.id, caFirmId: req.user.caFirmId });
   const task = await ComplianceTask.findOne(filter);
   if (!task) throw new ApiError(404, "Compliance task not found");
@@ -91,6 +103,7 @@ export const updateTask = catchAsync(async (req, res) => {
   if (isAdmin) {
     if (title !== undefined) task.title = title;
     if (category !== undefined) task.category = category;
+    if (subCategory !== undefined) task.subCategory = subCategory;
     if (recurrence !== undefined) task.recurrence = recurrence;
     if (dueDate !== undefined) task.dueDate = dueDate;
     if (clientId !== undefined) task.clientId = clientId;

@@ -13,6 +13,7 @@ export const createTaskSchema = z.object({
   body: z.object({
     title: z.string().trim().min(2, "Title is too short"),
     category: z.enum(["gst", "tds", "roc", "income_tax", "other"]).optional(),
+    subCategory: z.string().trim().optional(),
     recurrence: z.enum(["one_time", "monthly", "quarterly", "annual"]).optional(),
     dueDate: z.coerce.date({ errorMap: () => ({ message: "A valid due date is required" }) }),
     clientId: objectId,
@@ -25,6 +26,7 @@ export const updateTaskSchema = z.object({
   body: z.object({
     title: z.string().trim().min(2).optional(),
     category: z.enum(["gst", "tds", "roc", "income_tax", "other"]).optional(),
+    subCategory: z.string().trim().optional(),
     recurrence: z.enum(["one_time", "monthly", "quarterly", "annual"]).optional(),
     dueDate: z.coerce.date().optional(),
     status: z.enum(["pending", "in_progress", "done"]).optional(),

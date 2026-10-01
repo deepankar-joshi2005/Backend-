@@ -1,10 +1,10 @@
 import SupportTicket from "../models/SupportTicket";
 import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
-import { getPagination, buildMeta } from "../utils/paginate";
+import { getPagination, buildMeta, getDateRangeFilter } from "../utils/paginate";
 import { createNotification } from "../utils/createNotification";
 
-function scopedFilter(req, extra = {}) {
+function scopedFilter(req, extra: Record<string, any> = {}): Record<string, any> {
   if (req.user.role === "super_admin") return extra;
   return { ...extra, caFirmId: req.user.caFirmId };
 }
@@ -41,8 +41,9 @@ export const createTicket = catchAsync(async (req, res) => {
 
 export const listTickets = catchAsync(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
-  const filter = scopedFilter(req);
+  const filter = scopedFilter(req, getDateRangeFilter(req.query, "createdAt"));
   if (req.query.status) filter.status = req.query.status;
+  if (req.query.search) filter.subject = { $regex: req.query.search, $options: "i" };
 
   const [tickets, total] = await Promise.all([
     SupportTicket.find(filter)

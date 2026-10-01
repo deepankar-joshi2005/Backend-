@@ -9,7 +9,7 @@ import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
 import { generateUniqueSlug } from "../utils/slugify";
 import { generateTempPassword } from "../utils/generatePassword";
-import { getPagination, buildMeta } from "../utils/paginate";
+import { getPagination, buildMeta, getDateRangeFilter } from "../utils/paginate";
 import { getSystemSettings } from "../utils/getSystemSettings";
 import { writeAuditLog } from "../utils/writeAuditLog";
 import { createNotification } from "../utils/createNotification";
@@ -28,7 +28,7 @@ const razorpay = new Razorpay({
 
 export const listCaFirms = catchAsync(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
-  const filter = {};
+  const filter = { ...getDateRangeFilter(req.query, "createdAt") };
   if (req.query.search) {
     filter.name = { $regex: req.query.search, $options: "i" };
   }
@@ -475,6 +475,26 @@ export const verifySubscriptionPayment = catchAsync(async (req, res) => {
 });
 
 export const getSubscriptionPaymentHistory = catchAsync(async (req, res) => {
-  const payments = await CaFirmPayment.find({ caFirmId: req.user.caFirmId }).sort({ createdAt: -1 });
-  res.json({ success: true, data: payments });
+  const { page, limit, skip } = getPagination(req.query);
+  const filter = { caFirmId: req.user.caFirmId, ...getDateRangeFilter(req.query, "createdAt") };
+
+  const [payments, total, captured] = await Promise.all([
+    CaFirmPayment.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+    CaFirmPayment.countDocuments(filter),
+    // Lifetime total, independent of the date filter/pagination above — powers
+    // the "Total Paid" stat card, which should never shrink just because the
+    // list below is filtered to a narrower date range or page.
+    CaFirmPayment.aggregate([
+      { $match: { caFirmId: req.user.caFirmId, status: "CAPTURED" } },
+      { $group: { _id: null, totalPaid: { $sum: "$amount" }, count: { $sum: 1 } } },
+    ]),
+  ]);
+  const summary = captured[0] || { totalPaid: 0, count: 0 };
+
+  res.json({
+    success: true,
+    data: payments,
+    meta: buildMeta({ page, limit, total }),
+    summary: { totalPaid: summary.totalPaid, successfulCount: summary.count },
+  });
 });

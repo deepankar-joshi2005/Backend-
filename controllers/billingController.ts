@@ -2,6 +2,7 @@ import CaFirm from "../models/CaFirm";
 import CaFirmPayment from "../models/CaFirmPayment";
 import catchAsync from "../utils/catchAsync";
 import { getSystemSettings } from "../utils/getSystemSettings";
+import { getPagination, buildMeta, getDateRangeFilter } from "../utils/paginate";
 
 const TIER_PRICE_FIELD = { starter: "starterPrice", growth: "growthPrice", enterprise: "enterprisePrice" };
 
@@ -38,9 +39,16 @@ export const getBillingSummary = catchAsync(async (req, res) => {
 // Per-firm drill-down for the Billing page — who's on what plan, when it
 // expires, and what they last paid, all in one place for Super Admin.
 export const listFirmBilling = catchAsync(async (req, res) => {
-  const firms = await CaFirm.find().select("name plan").sort({ "plan.expiryDate": 1 });
+  const { page, limit, skip } = getPagination(req.query);
+  const filter = { ...getDateRangeFilter(req.query, "plan.expiryDate") };
+  if (req.query.search) filter.name = { $regex: req.query.search, $options: "i" };
+
+  const [firms, total] = await Promise.all([
+    CaFirm.find(filter).select("name plan").sort({ "plan.expiryDate": 1 }).skip(skip).limit(limit),
+    CaFirm.countDocuments(filter),
+  ]);
   const lastPayments = await CaFirmPayment.aggregate([
-    { $match: { status: "CAPTURED" } },
+    { $match: { status: "CAPTURED", caFirmId: { $in: firms.map((f) => f._id) } } },
     { $sort: { createdAt: -1 } },
     { $group: { _id: "$caFirmId", amount: { $first: "$amount" }, currency: { $first: "$currency" }, createdAt: { $first: "$createdAt" } } },
   ]);
@@ -54,5 +62,6 @@ export const listFirmBilling = catchAsync(async (req, res) => {
       plan: firm.plan,
       lastPayment: lastPaymentByFirm.get(String(firm._id)) || null,
     })),
+    meta: buildMeta({ page, limit, total }),
   });
 });
