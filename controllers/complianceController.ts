@@ -5,6 +5,13 @@ import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
 import { getPagination, buildMeta } from "../utils/paginate";
 import { writeAuditLog } from "../utils/writeAuditLog";
+import { notifyComplianceTaskAssigned, notifyComplianceTaskCompleted } from "../utils/notificationEvents";
+
+// Notifications are fire-and-forget so a slow SMTP/WhatsApp round trip never
+// delays the API response (the engine itself never throws).
+function inBackground(promise) {
+  promise.catch((err) => console.error("Compliance notification failed:", err.message));
+}
 
 // Per Role Matrix Section 4.3: CA Firm Staff only manage tasks assigned to them;
 // CA Firm Admin sees everything in the firm.
@@ -85,6 +92,9 @@ export const createTask = catchAsync(async (req, res) => {
     createdBy: req.user.id,
   });
 
+  // New record → tell the assignee (Module Scope doc, Section 6.1).
+  inBackground(notifyComplianceTaskAssigned(task, finalAssignee, req.user.id));
+
   const populated = await task.populate([{ path: "clientId", select: "name company" }, { path: "assignedTo", select: "name" }]);
   res.status(201).json({ success: true, data: populated, message: "Compliance task added" });
 });
@@ -96,6 +106,8 @@ export const updateTask = catchAsync(async (req, res) => {
   if (!task) throw new ApiError(404, "Compliance task not found");
 
   const isAdmin = req.user.role === "ca_firm_admin";
+  const previousAssignee = task.assignedTo ? task.assignedTo.toString() : null;
+  const previousStatus = task.status;
 
   // Staff only ever move a task along (status) and attach proof (documents) —
   // editing the task's own details or reassigning it is Admin-only (Role Matrix
@@ -116,6 +128,13 @@ export const updateTask = catchAsync(async (req, res) => {
   if (documents !== undefined) task.documents = documents;
 
   await task.save();
+
+  // Status change → client is told their filing is done; reassignment → the
+  // new assignee is told (Module Scope doc, Section 6.1).
+  if (task.status === "done" && previousStatus !== "done") inBackground(notifyComplianceTaskCompleted(task));
+  const newAssignee = task.assignedTo ? task.assignedTo.toString() : null;
+  if (newAssignee && newAssignee !== previousAssignee) inBackground(notifyComplianceTaskAssigned(task, newAssignee, req.user.id));
+
   const populated = await task.populate([{ path: "clientId", select: "name company" }, { path: "assignedTo", select: "name" }]);
   res.json({ success: true, data: populated, message: "Compliance task updated" });
 });

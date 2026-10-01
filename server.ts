@@ -7,6 +7,7 @@ import connectDB from "./config/db";
 import app from "./app";
 import { setupSocketHandlers } from "./hrms/socket/messageSocket";
 import { startSubscriptionJobs } from "./hrms/jobs/subscriptionJob";
+import { startNotificationJobs } from "./jobs/notificationJobs";
 
 connectDB();
 
@@ -39,6 +40,7 @@ setupSocketHandlers(io);
 
 httpServer.listen(PORT, () => {
   startSubscriptionJobs();
+  startNotificationJobs();
   console.log(`Server running on port ${PORT}`);
   console.log(`Socket.io is ready for connections`);
 });

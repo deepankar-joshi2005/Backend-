@@ -12,6 +12,33 @@ import CostCenter from "../../models/hrms/CostCenter";
 import mongoose from "mongoose";
 import { getCompanyAbbr } from "../userController";
 import { getEmployeeLimitStatus, employeeLimitErrorMessage } from "../../utils/enforceEmployeeLimit";
+import { sendUserCredentialsEmail } from "../../utils/email";
+import { notifyHrmsAccountCreated } from "../../utils/hrmsNotify";
+
+const BULK_DEFAULT_PASSWORD = "Password@123";
+
+// New logins from a bulk upload get the same welcome as Add User: credentials
+// by email + in-app + WhatsApp heads-up. Sent sequentially in the background
+// after the response so a large sheet doesn't hold the request open (or trip
+// SMTP rate limits by firing hundreds of mails at once).
+function welcomeBulkUsers(users: any[]) {
+    (async () => {
+        for (const user of users) {
+            try {
+                await sendUserCredentialsEmail({
+                    to: user.email,
+                    name: user.name,
+                    password: BULK_DEFAULT_PASSWORD,
+                    role: user.role,
+                    employeeId: user.employeeId,
+                });
+            } catch (err) {
+                console.error(`Failed to send credentials email to ${user.email}:`, (err as Error).message);
+            }
+            notifyHrmsAccountCreated(user);
+        }
+    })();
+}
 
 interface BulkEmployeeData {
     employeeId: string;
@@ -274,6 +301,7 @@ export const saveEmployeeBulk = async (req: Request, res: Response) => {
         }
 
         const results = { success: 0, failed: 0, errors: [] as string[] };
+        const createdUsers: any[] = [];
         // Per-company running count so a single batch can't blow past the plan's
         // employee limit either — checked/incremented as we go, not just per-row.
         const limitCache = new Map<string, { limit: number; current: number; planTier?: string } | null>();
@@ -340,7 +368,7 @@ export const saveEmployeeBulk = async (req: Request, res: Response) => {
                 const probationEndDate = new Date(joining);
                 probationEndDate.setMonth(probationEndDate.getMonth() + 6);
 
-                await User.create({
+                const created = await User.create({
                     employeeId: emp.employeeId,
                     name: emp.name,
                     email: emp.email,
@@ -359,8 +387,9 @@ export const saveEmployeeBulk = async (req: Request, res: Response) => {
                     employmentStatus: "PROBATION",
                     probationEndDate,
                     status: "ACTIVE",
-                    password: "Password@123", // Default password for bulk
+                    password: BULK_DEFAULT_PASSWORD, // Default password for bulk
                 });
+                createdUsers.push(created);
 
                 if (limitInfo) limitInfo.current++;
                 results.success++;
@@ -371,6 +400,7 @@ export const saveEmployeeBulk = async (req: Request, res: Response) => {
         }
 
         res.json({ success: true, message: "Bulk upload completed", results });
+        welcomeBulkUsers(createdUsers);
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }

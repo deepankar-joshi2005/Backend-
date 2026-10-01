@@ -16,9 +16,7 @@ import catchAsync from "../utils/catchAsync";
 import { getPagination, buildMeta, getDateRangeFilter } from "../utils/paginate";
 import { generateTempPassword } from "../utils/generatePassword";
 import { writeAuditLog } from "../utils/writeAuditLog";
-import { getSystemSettings } from "../utils/getSystemSettings";
-import { sendMail } from "../utils/sendMail";
-import { credentialsWelcomeEmail } from "../utils/emailTemplates";
+import { notifyBusinessClientInvite } from "../utils/notificationEvents";
 import {
   provisionHrmsCompany,
   getHrmsSsoToken,
@@ -133,22 +131,12 @@ async function provisionHrmsForClient(
     console.error("Failed to provision HRMS company:", err.message);
   }
 
-  // Fire-and-forget — the temp password is already returned in the API
-  // response (FirmCreatedNotice/TempPasswordNotice show it on-screen), so the
-  // request doesn't need to wait on an SMTP round trip to complete.
-  getSystemSettings()
-    .then((settings) => {
-      const { subject, html } = credentialsWelcomeEmail({
-        platformName: settings.platformName,
-        firmName: client.name,
-        recipientName: admin.name,
-        email: admin.email,
-        password: usingOwnPassword ? adminPassword : tempPassword,
-        loginUrl: `${process.env.CLIENT_URL}/login`,
-      });
-      return sendMail({ to: admin.email, subject, html });
-    })
-    .catch((err) => console.error("Failed to send business client admin welcome email:", err.message));
+  // Multi-Tenancy doc, Section 4.2 step 3 — "System invites the Business
+  // Client Admin via email/WhatsApp with their own login". Fire-and-forget —
+  // the temp password is already returned in the API response
+  // (FirmCreatedNotice/TempPasswordNotice show it on-screen), so the request
+  // doesn't need to wait on SMTP/Meta round trips to complete.
+  notifyBusinessClientInvite({ client, firm, admin, password: usingOwnPassword ? adminPassword : tempPassword });
 
   return { admin, tempPassword };
 }
@@ -182,20 +170,8 @@ async function createClientAdminLogin(
     createdBy: req.user.id,
   });
 
-  // Fire-and-forget — same reasoning as provisionHrmsForClient above.
-  getSystemSettings()
-    .then((settings) => {
-      const { subject, html } = credentialsWelcomeEmail({
-        platformName: settings.platformName,
-        firmName: client.name,
-        recipientName: admin.name,
-        email: admin.email,
-        password: usingOwnPassword ? adminPassword : tempPassword,
-        loginUrl: `${process.env.CLIENT_URL}/login`,
-      });
-      return sendMail({ to: admin.email, subject, html });
-    })
-    .catch((err) => console.error("Failed to send business client admin welcome email:", err.message));
+  // Fire-and-forget email + WhatsApp invite — same reasoning as provisionHrmsForClient above.
+  notifyBusinessClientInvite({ client, firm, admin, password: usingOwnPassword ? adminPassword : tempPassword });
 
   return { admin, tempPassword };
 }

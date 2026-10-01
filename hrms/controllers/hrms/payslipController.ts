@@ -5,7 +5,8 @@ import PayrollRun from "../../models/hrms/PayrollRun";
 import generatePayslipPDF from "../../utils/generatePayslipPDF";
 import { AuthRequest } from "../../middleware/auth";
 import SalaryStructure, { EARNING_FIELDS, DEDUCTION_FIELDS } from "../../models/hrms/SalaryStructure";
-import { sendCommonEmail, CommonEmailType } from "../../utils/email";
+import { CommonEmailType } from "../../utils/email";
+import { notifyHrmsUserInBackground } from "../../utils/hrmsNotify";
 import { ROLES } from "../../constants";
 import { buildPayslipBreakdown } from "../../utils/payslipBreakdown";
 
@@ -140,18 +141,22 @@ export const generatePayslipsFromPayroll = async (
 
       createdPayslips.push(payslip);
 
-      // 📧 EMAIL SEND
-      if (employee.email) {
-        await sendCommonEmail({
-          type: CommonEmailType.PAYSLIP_GENERATED,
-          to: employee.email,
-          name: employee.name,
-          data: {
-            month,
-            downloadUrl: `${process.env.FRONTEND_URL}/payslip/${payslip._id}`,
-          },
-        });
-      }
+      // Payslip generated → employee notified in-app + email + WhatsApp
+      // (Module Scope doc, Section 2 "Payslip generation" + 6.1). Background so
+      // a mail/WhatsApp failure can't abort generating the rest of the batch.
+      notifyHrmsUserInBackground({
+        userId: employee._id,
+        event: "hrms_payslip_generated",
+        title: "Payslip generated",
+        message: `Your payslip for ${month} is ready to download.`,
+        type: "success",
+        link: "/hrms/employee/payroll/payslips",
+        email: {
+          template: CommonEmailType.PAYSLIP_GENERATED,
+          data: { month, downloadUrl: `${process.env.FRONTEND_URL}/hrms-app/hrms/employee/payroll/payslips` },
+        },
+        whatsapp: { params: { month }, fallbackText: `Your payslip for ${month} has been generated. You can download it from HRMS.` },
+      });
     }
 
     res.status(201).json({

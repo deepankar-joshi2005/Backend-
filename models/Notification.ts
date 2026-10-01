@@ -10,13 +10,17 @@ const notificationSchema = new mongoose.Schema(
     message: { type: String, required: true, trim: true },
     type: {
       type: String,
-      enum: ["info", "warning", "expiry", "maintenance", "ticket", "system"],
+      enum: ["info", "warning", "expiry", "maintenance", "ticket", "system", "reminder", "task"],
       default: "info",
     },
     audience: {
       scope: { type: String, enum: ["super_admin", "all_firms", "firm"], required: true },
       caFirmId: { type: mongoose.Schema.Types.ObjectId, ref: "CaFirm", default: null },
       role: { type: String, default: null },
+      // Narrows a "firm" notification to one specific user (e.g. the staff
+      // member a compliance task was just assigned to). null = everyone the
+      // scope/role above already matches.
+      userId: { type: mongoose.Schema.Types.ObjectId, ref: "CaUser", default: null },
     },
     // Path relative to the viewing user's role-base (e.g. "support", "ca-firms"),
     // resolved on the frontend as `${basePath}/${link}` when the notification is clicked.

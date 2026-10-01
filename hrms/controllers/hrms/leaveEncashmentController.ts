@@ -4,6 +4,7 @@ import SalaryStructure from "../../models/hrms/SalaryStructure";
 import Payroll from "../../models/hrms/Payroll";
 import { AuthRequest } from "../../middleware/auth";
 import { ROLES } from "../../constants";
+import { notifyRequestStatus } from "../../utils/hrmsNotify";
 
 /**
  * ➕ Create Leave Encashment Request
@@ -169,6 +170,13 @@ export const updateLeaveEncashmentStatus = async (
         const request = await LeaveEncashment.findByIdAndUpdate(id, updateData, {
             new: true,
         }).populate("employee", "name email");
+
+        notifyRequestStatus({
+            employeeId: (request?.employee as any)?._id,
+            requestType: "Leave encashment",
+            status,
+            link: "/hrms/employee/request/leave-encashment",
+        });
 
         res.json({
             message: `Leave encashment request ${status.toLowerCase()} successfully`,

@@ -13,8 +13,7 @@ import { getPagination, buildMeta, getDateRangeFilter } from "../utils/paginate"
 import { getSystemSettings } from "../utils/getSystemSettings";
 import { writeAuditLog } from "../utils/writeAuditLog";
 import { createNotification } from "../utils/createNotification";
-import { sendMail } from "../utils/sendMail";
-import { credentialsWelcomeEmail } from "../utils/emailTemplates";
+import { notifyAccountCreated } from "../utils/notificationEvents";
 import { getGraceInfo } from "../utils/licenceGrace";
 
 const SALT_ROUNDS = Number(process.env.BCRYPT_SALT_ROUNDS) || 10;
@@ -140,21 +139,19 @@ export const createCaFirm = catchAsync(async (req, res) => {
     throw err;
   }
 
-  // Best-effort — a mail server hiccup must never fail the onboarding that already
-  // happened. The temp password is still shown on-screen (FirmCreatedNotice) as a fallback.
-  try {
-    const { subject, html } = credentialsWelcomeEmail({
-      platformName: settings.platformName,
-      firmName: firm.name,
-      recipientName: admin.name,
-      email: admin.email,
-      password: usingOwnPassword ? adminPassword : tempPassword,
-      loginUrl: `${process.env.CLIENT_URL}/login`,
-    });
-    await sendMail({ to: admin.email, subject, html });
-  } catch (err) {
-    console.error("Failed to send CA firm admin welcome email:", err.message);
-  }
+  // Multi-Tenancy doc, Section 4.1 — "System auto-creates the CA Firm Admin
+  // account and sends login credentials": credentials by email, plus a WhatsApp
+  // heads-up (no password) to the firm's phone. Fire-and-forget — a mail/Meta
+  // hiccup must never fail the onboarding that already happened; the temp
+  // password is still shown on-screen (FirmCreatedNotice) as a fallback.
+  notifyAccountCreated({
+    caFirmId: firm._id,
+    organisationName: firm.name,
+    name: admin.name,
+    email: admin.email,
+    phone: phone || admin.phone,
+    password: usingOwnPassword ? adminPassword : tempPassword,
+  });
 
   await writeAuditLog(req, {
     action: "ca_firm.created",
@@ -296,7 +293,7 @@ export const updateCaFirm = catchAsync(async (req, res) => {
 });
 
 export const updateSubscription = catchAsync(async (req, res) => {
-  const { tier, status, billingCycle, expiryDate } = req.body;
+  const { tier, status, billingCycle, expiryDate, whatsappQuota } = req.body;
   const update = {};
   if (tier !== undefined) {
     update["plan.tier"] = tier;
@@ -306,6 +303,7 @@ export const updateSubscription = catchAsync(async (req, res) => {
   if (status !== undefined) update["plan.status"] = status;
   if (billingCycle !== undefined) update["plan.billingCycle"] = billingCycle;
   if (expiryDate !== undefined) update["plan.expiryDate"] = expiryDate;
+  if (whatsappQuota !== undefined) update["plan.whatsappQuota"] = whatsappQuota;
 
   const firm = await CaFirm.findByIdAndUpdate(req.params.id, { $set: update }, { new: true });
   if (!firm) throw new ApiError(404, "CA firm not found");

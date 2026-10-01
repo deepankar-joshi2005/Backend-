@@ -70,3 +70,16 @@ export const projectionSchema = z.object({
     horizonYears: z.coerce.number().int().positive().max(50).optional(),
   }),
 });
+
+// "Send Report" — Module Scope doc, Section 6.1 (Loan Calculator → Personal
+// Finance Tracker result sharing via WhatsApp/email). The PDF is the same one
+// "Download Report" builds client-side, sent base64-encoded.
+export const shareReportSchema = z.object({
+  body: z.object({
+    channels: z.array(z.enum(["email", "whatsapp"])).min(1, "Pick at least one channel"),
+    pdfBase64: z.string().max(15_000_000, "Report PDF is too large").optional(),
+    fileName: z.string().trim().max(120).optional(),
+    annualRate: z.coerce.number().positive().max(50).optional(),
+    tenureMonths: z.coerce.number().int().positive().max(480).optional(),
+  }),
+});

@@ -15,6 +15,7 @@ import { ROLES } from "../constants";
 import { AuthRequest } from "../middleware/auth";
 import { sendPasswordResetEmail } from "../utils/email";
 import { sendUserCredentialsEmail } from "../utils/email";
+import { notifyHrmsAccountCreated } from "../utils/hrmsNotify";
 import path from "path";
 import fs from "fs";
 import { getEmployeeLimitStatus, employeeLimitErrorMessage } from "../utils/enforceEmployeeLimit";
@@ -246,6 +247,9 @@ export const createUser = async (req: AuthRequest, res: Response) => {
     } catch (err) {
       console.error("Failed to send credentials email:", err);
     }
+
+    /* ================= IN-APP + WHATSAPP WELCOME ================= */
+    notifyHrmsAccountCreated(user);
 
     /* ================= RESPONSE ================= */
     return res.status(201).json({

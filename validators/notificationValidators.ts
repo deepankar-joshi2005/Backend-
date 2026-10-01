@@ -11,3 +11,11 @@ export const sendNotificationSchema = z.object({
     link: z.string().trim().optional(),
   }),
 });
+
+export const updatePreferencesSchema = z.object({
+  body: z.object({
+    inApp: z.boolean().optional(),
+    email: z.boolean().optional(),
+    whatsapp: z.boolean().optional(),
+  }),
+});

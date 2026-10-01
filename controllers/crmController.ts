@@ -5,6 +5,13 @@ import ApiError from "../utils/ApiError";
 import catchAsync from "../utils/catchAsync";
 import { getPagination, buildMeta } from "../utils/paginate";
 import { writeAuditLog } from "../utils/writeAuditLog";
+import { notifyLeadAssigned, notifyLeadConverted } from "../utils/notificationEvents";
+
+// Notifications are fire-and-forget so a slow SMTP/WhatsApp round trip never
+// delays the API response (the engine itself never throws).
+function inBackground(promise) {
+  promise.catch((err) => console.error("CRM notification failed:", err.message));
+}
 
 // Per Role Matrix Section 4.2: CA Firm Staff only ever see leads assigned to them;
 // CA Firm Admin sees everything in the firm.
@@ -89,6 +96,7 @@ export const createLead = catchAsync(async (req, res) => {
     priority,
     expectedClosingDate,
     description,
+    notificationPreferences,
   } = req.body;
 
   // Staff can only ever work leads assigned to themselves; only Admin may hand a
@@ -112,11 +120,14 @@ export const createLead = catchAsync(async (req, res) => {
     priority,
     expectedClosingDate,
     description,
+    notificationPreferences,
     caFirmId: req.user.caFirmId,
     assignedTo: finalAssignee,
     createdBy: req.user.id,
     statusHistory: [{ status: "new", changedBy: req.user.id, changedByName: req.currentUser.name }],
   });
+
+  inBackground(notifyLeadAssigned(lead, finalAssignee, req.user.id));
 
   res.status(201).json({ success: true, data: lead, message: "Lead added" });
 });
@@ -144,10 +155,14 @@ export const updateLead = catchAsync(async (req, res) => {
     followUpType,
     followUpNote,
     description,
+    notificationPreferences,
   } = req.body;
   const filter = scopeToRole(req, { _id: req.params.id, caFirmId: req.user.caFirmId });
   const lead = await Lead.findOne(filter);
   if (!lead) throw new ApiError(404, "Lead not found");
+
+  const previousAssignee = lead.assignedTo ? lead.assignedTo.toString() : null;
+  const previousStatus = lead.status;
 
   if (name !== undefined) lead.name = name;
   if (leadType !== undefined) lead.leadType = leadType;
@@ -167,6 +182,12 @@ export const updateLead = catchAsync(async (req, res) => {
   if (followUpType !== undefined) lead.followUpType = followUpType || undefined;
   if (followUpNote !== undefined) lead.followUpNote = followUpNote;
   if (description !== undefined) lead.description = description;
+  if (notificationPreferences !== undefined) {
+    lead.notificationPreferences = {
+      email: notificationPreferences.email ?? lead.notificationPreferences?.email ?? true,
+      whatsapp: notificationPreferences.whatsapp ?? lead.notificationPreferences?.whatsapp ?? true,
+    };
+  }
 
   // Reassignment is Admin-only (Role Matrix: "Reassign leads between staff: Staff None").
   if (assignedTo !== undefined && req.user.role === "ca_firm_admin") {
@@ -180,6 +201,14 @@ export const updateLead = catchAsync(async (req, res) => {
   }
 
   await lead.save();
+
+  // Module Scope doc, Section 6.1 — status change / new assignment events.
+  // (Follow-up reminders themselves are sent by jobs/notificationJobs.ts on the
+  // follow-up date.)
+  if (lead.status === "converted" && previousStatus !== "converted") inBackground(notifyLeadConverted(lead));
+  const newAssignee = lead.assignedTo ? lead.assignedTo.toString() : null;
+  if (newAssignee && newAssignee !== previousAssignee) inBackground(notifyLeadAssigned(lead, newAssignee, req.user.id));
+
   res.json({ success: true, data: lead, message: "Lead updated" });
 });
 

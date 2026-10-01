@@ -10,5 +10,9 @@ export const updateSettingsSchema = z.object({
     growthPrice: z.coerce.number().min(0).optional(),
     enterprisePrice: z.coerce.number().min(0).optional(),
     currency: z.string().trim().optional(),
+    whatsappQuotaStarter: z.coerce.number().int().min(0).nullable().optional(),
+    whatsappQuotaGrowth: z.coerce.number().int().min(0).nullable().optional(),
+    whatsappQuotaEnterprise: z.coerce.number().int().min(0).nullable().optional(),
+    whatsappOverageRate: z.coerce.number().min(0).optional(),
   }),
 });

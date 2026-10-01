@@ -39,6 +39,12 @@ function requireCompanyNameForBusinessLeads(data, ctx) {
   }
 }
 
+// Per-channel opt-out for automated messages to this lead/client (Module Scope
+// doc, Section 6.1).
+const notificationPreferencesSchema = z
+  .object({ email: z.boolean().optional(), whatsapp: z.boolean().optional() })
+  .optional();
+
 export const createLeadSchema = z.object({
   body: z
     .object({
@@ -63,6 +69,7 @@ export const createLeadSchema = z.object({
 
       // Follow-up is scheduled afterwards via a dedicated action, not at creation.
       description: z.string().trim().optional(),
+      notificationPreferences: notificationPreferencesSchema,
     })
     .superRefine(requireCompanyNameForBusinessLeads),
 });
@@ -96,6 +103,7 @@ export const updateLeadSchema = z.object({
       followUpType: optionalEnum(FOLLOWUP_TYPES),
       followUpNote: z.string().trim().optional(),
       description: z.string().trim().optional(),
+      notificationPreferences: notificationPreferencesSchema,
     })
     .superRefine((data, ctx) => {
       if (data.leadType !== undefined) requireCompanyNameForBusinessLeads(data, ctx);

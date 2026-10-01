@@ -6,7 +6,8 @@ import { AuthRequest } from "../../middleware/auth";
 import Clearance from "../../models/hrms/Clearance";
 import { createClearanceFromResignation } from "./cleranceController";
 import User from "../../models/User";
-import { CommonEmailType, sendCommonEmail } from "../../utils/email";
+import { CommonEmailType } from "../../utils/email";
+import { notifyHrmsUserInBackground } from "../../utils/hrmsNotify";
 import { ROLES } from "../../constants";
 /* ---------------- CREATE ---------------- */
 export const createResignation = async (req: AuthRequest, res: Response) => {
@@ -141,11 +142,14 @@ export const updateResignationStatus = async (
         await createClearanceFromResignation(resignation);
       }
 
-      // 📧 EMAIL — APPROVED
-      await sendCommonEmail({
-        type: CommonEmailType.RESIGNATION_APPROVED,
-        to: user.email,
-        name: user.name,
+      notifyHrmsUserInBackground({
+        user,
+        event: "hrms_resignation_status",
+        title: "Resignation approved",
+        message: "Your resignation request has been approved. Please complete the clearance process.",
+        link: "/hrms/employee/request/resign",
+        email: { template: CommonEmailType.RESIGNATION_APPROVED },
+        whatsapp: { params: { status: "Approved" }, fallbackText: "Your resignation request has been approved. Please complete the clearance process." },
       });
 
       // 👤 DEACTIVATE USER
@@ -154,11 +158,15 @@ export const updateResignationStatus = async (
     }
 
     if (status === "REJECTED") {
-      // 📧 EMAIL — REJECTED
-      await sendCommonEmail({
-        type: CommonEmailType.RESIGNATION_REJECTED,
-        to: user.email,
-        name: user.name,
+      notifyHrmsUserInBackground({
+        user,
+        event: "hrms_resignation_status",
+        title: "Resignation rejected",
+        message: "Your resignation request has been rejected. Please contact HR if you have questions.",
+        type: "warning",
+        link: "/hrms/employee/request/resign",
+        email: { template: CommonEmailType.RESIGNATION_REJECTED },
+        whatsapp: { params: { status: "Rejected" }, fallbackText: "Your resignation request has been rejected. Please contact HR if you have questions." },
       });
     }
 

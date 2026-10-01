@@ -4,6 +4,7 @@ import { Request, Response } from "express";
 import ProfileUpdate from "../../models/hrms/ProfileUpdate";
 import { AuthRequest } from "../../middleware/auth";
 import User from "../../models/User";
+import { notifyRequestStatus } from "../../utils/hrmsNotify";
 /* ================= CREATE ================= */
 export const createProfileUpdate = async (req: AuthRequest, res: Response) => {
   try {
@@ -106,6 +107,8 @@ export const updateProfileUpdate = async (req: AuthRequest, res: Response) => {
     }
 
     await request.save();
+
+    notifyRequestStatus({ employeeId: request.employee, requestType: "Profile update", status, link: "/hrms/employee/request/profileUpdate" });
 
     res.json(request);
   } catch (error) {

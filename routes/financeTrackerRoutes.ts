@@ -1,11 +1,11 @@
 import express from "express";
-import { listProfiles, getProfile, createProfile, updateProfile, deleteProfile, computeProjection } from "../controllers/financeTrackerController";
+import { listProfiles, getProfile, createProfile, updateProfile, deleteProfile, computeProjection, shareReport } from "../controllers/financeTrackerController";
 import { protect } from "../middleware/auth";
 import { authorize } from "../middleware/roleCheck";
 import { requireModulePermission } from "../middleware/requireModulePermission";
 import { validate } from "../middleware/validateRequest";
 import { requireActiveFirm } from "../middleware/requireActiveFirm";
-import { createFinanceProfileSchema, updateFinanceProfileSchema, projectionSchema } from "../validators/financeTrackerValidators";
+import { createFinanceProfileSchema, updateFinanceProfileSchema, projectionSchema, shareReportSchema } from "../validators/financeTrackerValidators";
 
 const router = express.Router();
 
@@ -22,6 +22,14 @@ router.post(
   requireActiveFirm,
   validate(projectionSchema),
   computeProjection
+);
+
+router.post(
+  "/profiles/:id/share",
+  requireModulePermission("financeTracker"),
+  requireActiveFirm,
+  validate(shareReportSchema),
+  shareReport
 );
 
 export default router;

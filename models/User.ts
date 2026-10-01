@@ -90,6 +90,15 @@ const userSchema = new mongoose.Schema(
       compliance: modulePermissionSchema(STAFF_MODULE_DEFAULTS.compliance),
       financeTracker: modulePermissionSchema(STAFF_MODULE_DEFAULTS.financeTracker),
     },
+    // Per-channel opt-out — Module Scope doc, Section 6.1 ("Notification
+    // preference management (opt-out per channel)"). Enforced centrally in
+    // utils/notify.ts; in-app is the bell only.
+    notificationPreferences: {
+      inApp: { type: Boolean, default: true },
+      email: { type: Boolean, default: true },
+      whatsapp: { type: Boolean, default: true },
+      _id: false,
+    },
     mustChangePassword: { type: Boolean, default: false },
     tokenVersion: { type: Number, default: 0 },
     lastLoginAt: { type: Date },

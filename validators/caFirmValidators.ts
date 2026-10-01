@@ -93,6 +93,9 @@ export const updateSubscriptionSchema = z.object({
     status: z.enum(["trial", "active", "suspended", "expired"]).optional(),
     billingCycle: z.enum(["monthly", "annual"]).optional(),
     expiryDate: z.coerce.date().optional(),
+    // Negotiated monthly WhatsApp quota override (Multi-Tenancy doc, Section 5:
+    // "Enterprise — custom quota"). null clears it back to the tier default.
+    whatsappQuota: z.coerce.number().int().min(0).nullable().optional(),
   }),
 });
 
